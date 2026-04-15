@@ -2,7 +2,8 @@
 <html>
     <head>
         <meta charset="utf-8">
-      
+        <meta http-equiv="Cache-Control" content="no-cache">
+
         <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
         <meta name="apple-mobile-web-app-capable" content="yes">
@@ -213,11 +214,15 @@
                                 <img class="link-img" alt="Get it on Google Play" src="gp_badge.png"/>
                             </a>
                         </div>
+                        
                     </div>
                 </div>
             </div>
         </div>
-
+        <div id="stats-display" style="position: fixed; bottom: 20px; left: 20px; color: rgba(255,255,255,0.4); font-family: monospace; font-size: 12px; pointer-events: none; z-index: 100;">
+            SINUS 0 PHASE | BEREIT
+        </div>
+        <canvas id="pulse-canvas" style="position: fixed; bottom: 0; left: 0; width: 100%; height: 60px; pointer-events: none; z-index: 99;"></canvas>
         <script src="./script.js"></script>
     </body>
 </html>

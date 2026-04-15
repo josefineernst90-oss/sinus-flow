@@ -39,6 +39,10 @@ promoPopupClose.addEventListener('click', e => {
     promoPopup.style.display = 'none';
 });
 
+const statsDiv = document.getElementById('stats-display');
+const pulseCanvas = document.getElementById('pulse-canvas');
+const pCtx = pulseCanvas.getContext('2d');
+
 const appleLink = document.getElementById('apple_link');
 appleLink.addEventListener('click', e => {
     ga('send', 'event', 'link promo', 'app');
@@ -58,6 +62,10 @@ resizeCanvas();
 
 let sinusState = "STANDBY"; 
 let nextPhaseIsEinatmen = true;
+// --- DATEN-LOGGING ---
+let sessionLogs = [];
+let phaseStartTime = Date.now();
+let sessionStartTime = Date.now();
 
 let config = {
     // --- GRUNDAUFLÖSUNG (PERFORMANCE) ---
@@ -115,6 +123,7 @@ let pointers = [];
 let splatStack = [];
 pointers.push(new pointerPrototype());
 
+
 const { gl, ext } = getWebGLContext(canvas);
 
 if (isMobile()) {
@@ -128,6 +137,46 @@ if (!ext.supportLinearFiltering) {
 }
 
 startGUI();
+
+function logPhaseChange(previousPhase, currentPhase) {
+    let now = Date.now();
+    let duration = (now - phaseStartTime) / 1000;
+    
+    if (duration > 0.5) { // Ignoriere Fehl-Klicks
+        sessionLogs.push({ phase: previousPhase, duration: duration });
+    }
+
+    // Update das Text-Display
+    let summary = getSessionSummary();
+    statsDiv.innerHTML = summary.replace(/\n/g, '<br>');
+    
+    drawPulse();
+    phaseStartTime = now;
+}
+
+function drawPulse() {
+    pCtx.clearRect(0, 0, pulseCanvas.width, pulseCanvas.height);
+    pCtx.beginPath();
+    pCtx.strokeStyle = "rgba(255, 150, 0, 0.5)"; // Bernstein-Welle
+    pCtx.lineWidth = 2;
+
+    let x = pulseCanvas.width;
+    let step = 30; // Abstand zwischen den Wellen
+
+    // Wir zeichnen die letzten 20 Phasen von rechts nach links
+    for (let i = sessionLogs.length - 1; i >= 0 && x > 0; i--) {
+        let entry = sessionLogs[i];
+        let height = Math.min(entry.duration * 10, 50); // Skaliere Zeit auf Höhe
+        
+        if (entry.phase === "EINATMEN") {
+            pCtx.lineTo(x, 50 - height); // Welle nach oben
+        } else {
+            pCtx.lineTo(x, 50 + height / 2); // Welle nach unten
+        }
+        x -= step;
+    }
+    pCtx.stroke();
+}
 
 function getWebGLContext (canvas) {
     const params = { alpha: true, depth: false, stencil: false, antialias: false, preserveDrawingBuffer: false };
@@ -1189,6 +1238,7 @@ let driftTimer = 0;
 // Die Startpositionen unserer beiden Pole
 let poleA = { x: 0.5, y: 0.3, targetX: 0.5, targetY: 0.3, color: { r: 1.0, g: 0.5, b: 0.05 } };
 let poleB = { x: 0.5, y: 0.7, targetX: 0.5, targetY: 0.7, color: { r: 0.05, g: 0.3, b: 1.0 } };
+let lastInteractionTime = Date.now();
 
 update();
 
@@ -1196,6 +1246,15 @@ update();
 function applyStandbyDrift() {
     if (sinusState !== "STANDBY") return;
 
+    // Zeit-Check: Wie viele Millisekunden sind seit der letzten Berührung vergangen?
+    let timeSinceLastTouch = Date.now() - lastInteractionTime;
+    
+    // 60.000 ms = 1 Minute
+    if (timeSinceLastTouch < 60000) {
+        return; // Wir brechen hier ab, das Display bleibt schwarz
+    }
+
+    // Ab hier folgt dein bestehender Code für den Drift (die tanzenden Pole)...
     driftTimer += 0.01;
     
     // 1. Die Pole bewegen sich weich auf ihre Zielpositionen zu (Interpolation)
@@ -1751,6 +1810,7 @@ window.addEventListener('mouseup', endTouch);
 window.addEventListener('touchend', endTouch);
 
 function startTouch(e) {
+    lastInteractionTime = Date.now(); // Zeitstempel aktualisieren
     let touch = e.touches ? e.touches[0] : e;
     lastX = touch.clientX;
     lastY = touch.clientY;
@@ -1768,9 +1828,11 @@ function startTouch(e) {
             console.log(">> 3: AUSATMEN START (Blau)");
         }
     }
+    phaseStartTime = Date.now(); // Zeitmessung startet erst beim Auflegen
 }
 
 function moveTouch(e) {
+    lastInteractionTime = Date.now(); // Zeitstempel aktualisieren
     if (lastX === null || lastY === null) return;
     
     let touch = e.touches ? e.touches[0] : e;
@@ -1835,6 +1897,7 @@ function endTouch() {
 }
 
 function togglePhase() {
+    let oldPhase = sinusState;
     if (sinusState === "EINATMEN") {
         sinusState = "AUSATMEN";
         console.log(">> 3: AUSATMEN (180° Haken -> Blau)");
@@ -1842,6 +1905,8 @@ function togglePhase() {
         sinusState = "EINATMEN";
         console.log(">> 1: EINATMEN (180° Haken -> Bernstein)");
     }
+    // Protokoll schreiben
+    logPhaseChange(oldPhase, sinusState);
 }
 
 function startPhase() {
@@ -1863,5 +1928,37 @@ function endPhase() {
     }
      
     console.log(">> 0: PAUSE / STANDBY (Finger weg, Stille)");
+}
+
+// Erweiterte Analyse-Variablen
+function getSessionSummary() {
+    if (sessionLogs.length === 0) return "Noch keine Daten gesammelt.";
+
+    let totalDuration = sessionLogs.reduce((acc, entry) => acc + parseFloat(entry.duration), 0);
+    let avgDuration = (totalDuration / sessionLogs.length).toFixed(2);
+    
+    let einatmen = sessionLogs.filter(e => e.phase === "EINATMEN");
+    let ausatmen = sessionLogs.filter(e => e.phase === "AUSATMEN");
+    
+    let avgEin = (einatmen.reduce((acc, e) => acc + parseFloat(e.duration), 0) / (einatmen.length || 1)).toFixed(2);
+    let avgAus = (ausatmen.reduce((acc, e) => acc + parseFloat(e.duration), 0) / (ausatmen.length || 1)).toFixed(2);
+
+    return `
+        --- SESSION SUMMARY ---
+        Zyklen: ${sessionLogs.length}
+        Ø Phase: ${avgDuration}s
+        Ø Einatmen: ${avgEin}s
+        Ø Ausatmen: ${avgAus}s
+        Kohärenz: ${Math.abs(avgEin - avgAus) < 0.5 ? "HOCH" : "VARIABEL"}
+    `;
+}
+// Funktion zum "Dumping" der Daten in die Zwischenablage oder Konsole
+function exportSessionData() {
+    let summary = getSessionSummary();
+    console.log(summary);
+    // Optional: Kopiert die JSON-Rohdaten in die Zwischenablage
+    navigator.clipboard.writeText(JSON.stringify(sessionLogs, null, 2))
+        .then(() => alert("Daten in Zwischenablage kopiert!\n" + summary))
+        .catch(err => console.error("Export fehlgeschlagen", err));
 }
 ;

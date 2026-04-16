@@ -1923,18 +1923,8 @@ function togglePhase() {
     if (pointers[0]) {
         pointers[0].color = generateColor();
     }
-    if (navigator.vibrate) {
-    // Wir löschen alle laufenden Vibrationen, bevor wir neu starten
-    navigator.vibrate(0); 
-
-    if (sinusState === "EINATMEN") {
-        // Bernstein-Start: Ein kräftiger Impuls
-        navigator.vibrate(60); 
-    } else if (sinusState === "AUSATMEN") {
-        // Blau-Start: Ein zittriges Surren
-        navigator.vibrate([20, 30, 20, 30, 20]); 
-    }
-}
+   
+   
     logPhaseChange(oldPhase, sinusState);
 }
 

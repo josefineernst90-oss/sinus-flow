@@ -1906,7 +1906,15 @@ function endTouch() {
     sinusState = "STANDBY";
     console.log(">> 0: STANDBY (Daten gespeichert)");
 }
-
+document.getElementById('haptic-unlock').addEventListener('click', function() {
+    // Kurzes Rütteln zur Bestätigung
+    if (navigator.vibrate) {
+        navigator.vibrate([50, 30, 50]);
+    }
+    // Button verstecken, damit er nicht nervt
+    this.style.display = 'none';
+    console.log("Haptik für Session freigeschaltet!");
+});
 function togglePhase() {
    let oldPhase = sinusState;
     if (sinusState === "EINATMEN") {
@@ -1922,11 +1930,9 @@ function togglePhase() {
   // HIER KOMMT DIE MAGIE
     if (navigator.vibrate) {
         if (sinusState === "EINATMEN") {
-            // Bernstein: Ein kräftiger Stoß
-            navigator.vibrate(60); 
+            navigator.vibrate(80); // Bernstein: Kräftiger Stoß
         } else {
-            // Blau: Ein feines Surren
-            navigator.vibrate([15, 15, 15, 15, 40]); 
+            navigator.vibrate([20, 30, 20, 30, 80]); // Blau: Surren
         }
     }
     // SOFORTIGES Update der Farbe, nicht auf den Timer warten!

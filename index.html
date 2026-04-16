@@ -7,72 +7,19 @@
     
     <script type="text/javascript" src="dat.gui.min.js"></script>
 
-    <style>
+ <style>
         * { user-select: none; box-sizing: border-box; }
-        html, body { 
-            overflow: hidden; 
-            background-color: #000; 
-            margin: 0; 
-            width: 100%; 
-            height: 100%; 
-        }
-        body { position: fixed; }
+        html, body { overflow: hidden; background-color: #000; margin: 0; width: 100%; height: 100%; position: fixed; }
         canvas { width: 100%; height: 100%; display: block; }
 
-       #stats-display {
-        position: fixed; 
-        top: 20px; 
-        left: 20px; 
-        color: rgba(255,255,255,0.4); 
-        font-family: monospace; 
-        font-size: 12px; 
-        pointer-events: none; 
-        z-index: 100;
-        line-height: 1.5;
-    }
-#ui-container {
-        position: fixed; 
-        bottom: 70px; 
-        left: 20px; 
-        width: 250px; 
-        z-index: 101; 
-        font-family: monospace;
-        pointer-events: none;
-    }
+        #stats-display { position: fixed; top: 20px; left: 20px; color: rgba(255,255,255,0.3); font-family: monospace; font-size: 11px; z-index: 100; pointer-events: none; }
+        
+        #controls-right { position: fixed; top: 20px; right: 20px; z-index: 102; display: flex; flex-direction: column; gap: 10px; }
+        button { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: rgba(255,255,255,0.4); font-family: monospace; font-size: 10px; padding: 8px 12px; cursor: pointer; border-radius: 4px; pointer-events: auto; }
+        button.active { color: #00ff7f; border-color: #00ff7f; background: rgba(0,255,127,0.1); }
 
-    #pulse-canvas {
-        position: fixed; 
-        bottom: 0; 
-        left: 0; 
-        width: 100%; 
-        height: 60px; 
-        pointer-events: none; 
-        z-index: 99;
-        opacity: 0.5;
-    }
-   
-   #clean-session {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    z-index: 999; /* Sehr hoch, um über allem zu liegen */
-    background: rgba(255,255,255,0.1);
-    border: 1px solid rgba(255,255,255,0.2);
-    color: rgba(255,255,255,0.8);
-    font-family: monospace;
-    font-size: 12px; /* Etwas größer für Finger-Bedienung */
-    padding: 10px 15px;
-    cursor: pointer;
-    border-radius: 4px;
-    pointer-events: auto !important; /* Klicks erzwingen */
-    
-}
- 
-
-        /* Alles was das Script braucht, aber wir nicht sehen wollen */
-        .script-anchors { 
-            display: none !important; 
-        }
+        #ui-container { position: fixed; bottom: 80px; left: 20px; width: 250px; z-index: 101; font-family: monospace; pointer-events: none; }
+        #progress-bar { width: 0%; height: 100%; transition: background 0.3s; }
     </style>
 
     <script>
@@ -82,23 +29,22 @@
 </head>
 <body>
 
-   <canvas></canvas>
-
-    <button id="clean-session">CLEAN</button>
-  
+  <canvas></canvas>
+    <div id="stats-display">KALIBRIERUNG LÄUFT...</div>
+    <div id="controls-right">
+        <button id="autopilot-btn">AUTOPILOT: AUS</button>
+        <button id="clean-session">SESSION CLEAN</button>
+    </div>
     <div id="ui-container">
-        <div id="phase-label">BEREIT</div>
+        <div id="phase-label" style="color: #fff; font-size: 14px; margin-bottom: 5px;">BEREIT</div>
         <div style="width: 100%; height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden;">
-            <div id="progress-bar" style="width: 0%; height: 100%; background: #ff9600; transition: background 0.3s;"></div>
+            <div id="progress-bar"></div>
         </div>
         <div id="timer-display" style="color: rgba(255,255,255,0.6); font-size: 12px; margin-top: 5px;">0.00s / Ø 0.00s</div>
     </div>
+    <canvas id="pulse-canvas" style="position: fixed; bottom: 0; left: 0; width: 100%; height: 60px; pointer-events: none; z-index: 99; opacity: 0.5;"></canvas>
 
-    <div id="stats-display">BEREIT</div>
-    
-    <canvas id="pulse-canvas"></canvas>
-
-   <script src="./fluid-engine.js"></script>
+    <script src="./fluid-engine.js"></script>
   
 </body>
 </html>

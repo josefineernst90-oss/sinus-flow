@@ -33,6 +33,13 @@ const statsDiv = document.getElementById('stats-display');
 const pulseCanvas = document.getElementById('pulse-canvas');
 const pCtx = pulseCanvas.getContext('2d');
 
+let lastToggleTime = 0; // Sperre gegen nervöses Springen
+
+// Stufe 2: Antizipation & Autopilot
+let autopilotActive = false;
+let isCalibrated = false;
+const REQUIRED_CYCLES = 5;
+
 const cleanBtn = document.getElementById('clean-session');
 if (cleanBtn) {
     cleanBtn.addEventListener('touchstart', (e) => {
@@ -46,6 +53,16 @@ if (cleanBtn) {
             localStorage.removeItem('sinus_logs');
             location.reload(); // Einfachste Methode zum Reset auf dem Handy
         }
+    });
+}
+const autoBtn = document.getElementById('autopilot-btn');
+if (autoBtn) {
+    autoBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!isCalibrated) return alert("Bitte erst 5 Zyklen atmen zum Kalibrieren.");
+        autopilotActive = !autopilotActive;
+        autoBtn.innerText = autopilotActive ? "AUTOPILOT: AN" : "AUTOPILOT: AUS";
+        autoBtn.classList.toggle('active');
     });
 }
 // Simulation section
@@ -132,68 +149,65 @@ if (!ext.supportLinearFiltering) {
     config.BLOOM = false;
     config.SUNRAYS = false;
 }
+function runAutopilot() {
+    if (!autopilotActive || sinusState === "STANDBY") return;
+    
+    let currentDuration = (Date.now() - phaseStartTime) / 1000;
+    let relevantLogs = sessionLogs.filter(e => e.phase === sinusState);
+    let avg = relevantLogs.length > 0 
+        ? relevantLogs.reduce((acc, e) => acc + e.duration, 0) / relevantLogs.length 
+        : 5.0;
 
+    // Das Handy führt den Wechsel aus, wenn der Durchschnitt erreicht ist
+    if (currentDuration >= avg) {
+        togglePhase();
+    }
+}
 function updateLiveUI() {
     if (sinusState === "STANDBY") {
         progressBar.style.width = "0%";
-        
-        // Die "Vorschau" Logik: Was passiert als nächstes?
-        if (nextPhaseIsEinatmen) {
-            phaseLabel.innerText = "BEREIT: EINATMEN";
-            phaseLabel.style.color = "rgba(255, 150, 0, 0.5)"; // Bernstein, aber blasser
-        } else {
-            phaseLabel.innerText = "BEREIT: AUSATMEN";
-            phaseLabel.style.color = "rgba(0, 170, 255, 0.5)"; // Blau, aber blasser
-        }
+        phaseLabel.innerText = nextPhaseIsEinatmen ? "BEREIT: EINATMEN" : "BEREIT: AUSATMEN";
+        phaseLabel.style.color = "rgba(255,255,255,0.5)";
         return;
     }
 
-    // Zeit seit Phasenbeginn
     let currentDuration = (Date.now() - phaseStartTime) / 1000;
-    
-    // Den passenden Durchschnitt finden
     let relevantLogs = sessionLogs.filter(e => e.phase === sinusState);
-    let avg = 0;
-    if (relevantLogs.length > 0) {
-        avg = relevantLogs.reduce((acc, e) => acc + e.duration, 0) / relevantLogs.length;
-    } else {
-        avg = 5.0; // Standardwert für den ersten Durchgang
-    }
-
-    // Fortschritt berechnen
+    let avg = relevantLogs.length > 0 ? relevantLogs.reduce((acc, e) => acc + e.duration, 0) / relevantLogs.length : 5.0;
     let progress = (currentDuration / avg) * 100;
-    
+
     // UI-Update
     phaseLabel.innerText = sinusState;
     phaseLabel.style.color = sinusState === "EINATMEN" ? "#ff9600" : "#00aaff";
     
-    // Balken-Farbe ändern, wenn man über dem Durchschnitt ist
-    if (progress > 100) {
-        progressBar.style.background = "#00ff7f"; // Grün für "Übererfüllung"
-        progressBar.style.width = "100%"; 
+    // Antizipation: Balken fängt an zu leuchten, wenn 90% des Ø erreicht sind
+    if (currentDuration > avg * 0.9) {
+        progressBar.style.boxShadow = "0 0 15px #fff";
     } else {
-        progressBar.style.background = sinusState === "EINATMEN" ? "#ff9600" : "#00aaff";
-        progressBar.style.width = progress + "%";
+        progressBar.style.boxShadow = "none";
     }
 
+    progressBar.style.background = (progress > 100) ? "#00ff7f" : phaseLabel.style.color;
+    progressBar.style.width = Math.min(progress, 100) + "%";
     timerDisplay.innerText = `${currentDuration.toFixed(2)}s / Ø ${avg.toFixed(2)}s`;
 }
 
 function logPhaseChange(previousPhase, sinusState) {
-    let now = Date.now();
-    let duration = (now - phaseStartTime) / 1000;
-    
-    if (duration > 0.5) { 
+   let duration = (Date.now() - phaseStartTime) / 1000;
+    if (duration > 0.8) { 
         sessionLogs.push({ phase: previousPhase, duration: duration });
-        saveLogsToStorage(); // <-- Hier speichern wir die Daten permanent
+        localStorage.setItem('sinus_logs', JSON.stringify(sessionLogs));
     }
 
-    // Update das Text-Display
-    let summary = getSessionSummary();
-    statsDiv.innerHTML = summary.replace(/\n/g, '<br>');
-    
+    // Kalibrierung prüfen: Erst nach 5 Zyklen ist der Autopilot bereit
+    if (!isCalibrated && sessionLogs.length >= REQUIRED_CYCLES) {
+        isCalibrated = true;
+        statsDiv.style.color = "#00ff7f"; // Grün signalisiert "Bereit"
+    }
+
+    statsDiv.innerHTML = getSessionSummary().replace(/\n/g, '<br>');
     drawPulse();
-    phaseStartTime = now;
+    phaseStartTime = Date.now();
 }
 let touchTimer;
 
@@ -216,21 +230,15 @@ function handlePointerUp() {
 
 
 function playPing(frequency = 880, duration = 0.1) {
-    if (!audioCtx) return;
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-    
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(frequency, audioCtx.currentTime);
-    
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
     gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
-    
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    
-    osc.start();
-    osc.stop(audioCtx.currentTime + duration);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.1);
 }
 function drawPulse() {
     pCtx.clearRect(0, 0, pulseCanvas.width, pulseCanvas.height);
@@ -1302,17 +1310,17 @@ function applyStandbyDrift() {
 }
 function update () {
     const dt = calcDeltaTime();
-    if (resizeCanvas())
-        initFramebuffers();
+    if (resizeCanvas()) initFramebuffers();
 
     applyStandbyDrift();
-
     updateColors(dt);
     applyInputs();
-    if (!config.PAUSED)
-        step(dt);
+    
+    if (!config.PAUSED) step(dt);
     render(null);
+    
     updateLiveUI();
+    runAutopilot(); // Stufe 2 Logik
     requestAnimationFrame(update);
 }
 
@@ -1911,32 +1919,23 @@ function endTouch() {
 }
 
 function togglePhase() {
-   let oldPhase = sinusState;
-    if (sinusState === "EINATMEN") {
-        sinusState = "AUSATMEN";
-        nextPhaseIsEinatmen = true; // Nach Ausatmen kommt wieder Einatmen
-        playPing(440, 0.1); // Tieferer Ton für Ausatmen (Beruhigung)
-    } else {
-        sinusState = "EINATMEN";
-        nextPhaseIsEinatmen = false; // Nach Einatmen kommt wieder Ausatmen
-       playPing(660, 0.1); // Mittlerer Ton für Einatmen (Fokus)
-    }
+   let now = Date.now();
+    // Verhindert das "Springen": Nur alle 1.5s ist ein Wechsel möglich
+    if (now - lastToggleTime < 1500) return; 
+
+    let oldPhase = sinusState;
+    sinusState = (sinusState === "EINATMEN") ? "AUSATMEN" : "EINATMEN";
+    nextPhaseIsEinatmen = (sinusState === "EINATMEN");
     
-  // Deine bestehende Vibrations-Logik
-    if (navigator.vibrate) {
-        if (sinusState === "EINATMEN") {
-            navigator.vibrate(60); 
-        } else {
-            navigator.vibrate([15, 15, 40]); 
-        }
-    }
-    // SOFORTIGES Update der Farbe, nicht auf den Timer warten!
-    if (pointers[0]) {
-        pointers[0].color = generateColor();
-    }
-   
-   
-    logPhaseChange(oldPhase, sinusState);
+    // Akustisches & Haptisches Feedback
+    playPing(sinusState === "EINATMEN" ? 660 : 440);
+    if (navigator.vibrate) navigator.vibrate(sinusState === "EINATMEN" ? 40 : [20, 20]);
+    
+    // Sofortiges Farb-Update
+    if (pointers[0]) pointers[0].color = generateColor();
+    
+    lastToggleTime = now;
+    logPhaseChange(oldPhase);
 }
 
 function startPhase() {

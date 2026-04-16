@@ -1845,6 +1845,11 @@ function startTouch(e) {
         }
     }
     phaseStartTime = Date.now(); // Zeitmessung startet erst beim Auflegen
+   if (sinusState === "AUSATMEN") {
+    // Kurze Impulse (15ms) unterbrochen von Mini-Pausen (10ms)
+    // Erzeugt ein mechanisches Surren
+    navigator.vibrate([15, 10, 15, 10, 15, 10, 15, 10, 80]); 
+}
 }
 
 function moveTouch(e) {

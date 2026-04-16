@@ -1825,7 +1825,7 @@ window.addEventListener('touchend', endTouch);
 
 function startTouch(e) {
     // Kurzes Signal beim ersten Auflegen
-    if (navigator.vibrate) navigator.vibrate(10);
+    if (navigator.vibrate) navigator.vibrate(200);
     lastInteractionTime = Date.now(); // Zeitstempel aktualisieren
     let touch = e.touches ? e.touches[0] : e;
     lastX = touch.clientX;

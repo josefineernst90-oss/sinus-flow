@@ -1928,12 +1928,12 @@ function togglePhase() {
         // WICHTIG: Wir prüfen hier sinusState!
         if (sinusState === "EINATMEN") {
             // Bernstein: Ein langer, kräftiger Brumm (80ms)
-            navigator.vibrate(80); 
+            navigator.vibrate(100); 
             console.log("Vibrate: EINATMEN");
         } else {
             // Blau: Ein zitterndes Surren (kurze Impulse mit Pausen)
             // 30ms an, 30ms aus, 30ms an, 30ms aus, 80ms an
-            navigator.vibrate([30, 30, 30, 30, 80]); 
+            navigator.vibrate([100, 100, 100, 100, 100]); 
             console.log("Vibrate: AUSATMEN");
         }
     }

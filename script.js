@@ -33,6 +33,16 @@ const statsDiv = document.getElementById('stats-display');
 const pulseCanvas = document.getElementById('pulse-canvas');
 const pCtx = pulseCanvas.getContext('2d');
 
+document.getElementById('clean-session').addEventListener('click', (e) => {
+    e.stopPropagation(); // Verhindert, dass die Simulation einen Klick registriert
+    if (confirm("Möchtest du alle Session-Daten löschen?")) {
+        sessionLogs = [];
+        localStorage.removeItem('sinus_logs');
+        statsDiv.innerHTML = "BEREIT";
+        drawPulse(); // Löscht auch die Welle im Pulse-Canvas
+        alert("Session bereinigt.");
+    }
+});
 // Simulation section
 
 const canvas = document.getElementsByTagName('canvas')[0];
@@ -41,7 +51,8 @@ resizeCanvas();
 let sinusState = "STANDBY"; 
 let nextPhaseIsEinatmen = true;
 // --- DATEN-LOGGING ---
-let sessionLogs = [];
+// Lädt gespeicherte Daten oder startet mit einer leeren Liste
+let sessionLogs = JSON.parse(localStorage.getItem('sinus_logs') || '[]');
 let phaseStartTime = Date.now();
 let sessionStartTime = Date.now();
 
@@ -164,8 +175,9 @@ function logPhaseChange(previousPhase, currentPhase) {
     let now = Date.now();
     let duration = (now - phaseStartTime) / 1000;
     
-    if (duration > 0.5) { // Ignoriere Fehl-Klicks
+    if (duration > 0.5) { 
         sessionLogs.push({ phase: previousPhase, duration: duration });
+        saveLogsToStorage(); // <-- Hier speichern wir die Daten permanent
     }
 
     // Update das Text-Display
@@ -175,7 +187,53 @@ function logPhaseChange(previousPhase, currentPhase) {
     drawPulse();
     phaseStartTime = now;
 }
+let touchTimer;
+const NOTAUS_DURATION = 2000; // 2 Sekunden halten
+let audioCtx;
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+}
+function handlePointerDown(e) {
+    initAudio(); // Audio aktivieren
+    // ...
+    touchTimer = setTimeout(() => {
+        triggerNotaus();
+    }, NOTAUS_DURATION);
+}
 
+function handlePointerUp() {
+    clearTimeout(touchTimer);
+    // ...
+}
+
+function triggerNotaus() {
+    // Alles auf Null
+    currentPhase = "STANDBY";
+    playPing(220, 0.5); // Tiefer Bestätigungston
+    if (navigator.vibrate) navigator.vibrate([100, 100, 100]);
+    
+    console.log("NOTAUS aktiviert - System im Sinus 0 Modus");
+    // Hier könntest du auch die Session-Zusammenfassung direkt anzeigen
+}
+function playPing(frequency = 880, duration = 0.1) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+    
+    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+    
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+}
 function drawPulse() {
     pCtx.clearRect(0, 0, pulseCanvas.width, pulseCanvas.height);
     pCtx.beginPath();
@@ -1856,7 +1914,16 @@ function togglePhase() {
     if (pointers[0]) {
         pointers[0].color = generateColor();
     }
-    
+    // Haptischer Impuls beim Wechsel
+    if (navigator.vibrate) {
+        // Ein kurzer, knackiger Stoß beim Einatmen, 
+        // zwei kurze beim Ausatmen für die Unterscheidung
+        if (currentPhase === "EINATMEN") {
+            navigator.vibrate(40); 
+        } else {
+            navigator.vibrate([30, 50, 30]); 
+        }
+    }
     logPhaseChange(oldPhase, sinusState);
 }
 
@@ -1911,5 +1978,8 @@ function exportSessionData() {
     navigator.clipboard.writeText(JSON.stringify(sessionLogs, null, 2))
         .then(() => alert("Daten in Zwischenablage kopiert!\n" + summary))
         .catch(err => console.error("Export fehlgeschlagen", err));
+}
+function saveLogsToStorage() {
+    localStorage.setItem('sinus_logs', JSON.stringify(sessionLogs));
 }
 ;

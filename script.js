@@ -33,16 +33,21 @@ const statsDiv = document.getElementById('stats-display');
 const pulseCanvas = document.getElementById('pulse-canvas');
 const pCtx = pulseCanvas.getContext('2d');
 
-document.getElementById('clean-session').addEventListener('click', (e) => {
-    e.stopPropagation(); // Verhindert, dass die Simulation einen Klick registriert
-    if (confirm("Möchtest du alle Session-Daten löschen?")) {
-        sessionLogs = [];
-        localStorage.removeItem('sinus_logs');
-        statsDiv.innerHTML = "BEREIT";
-        drawPulse(); // Löscht auch die Welle im Pulse-Canvas
-        alert("Session bereinigt.");
-    }
-});
+const cleanBtn = document.getElementById('clean-session');
+if (cleanBtn) {
+    cleanBtn.addEventListener('touchstart', (e) => {
+        e.stopPropagation(); // Verhindert, dass die Simulation reagiert
+    }, {passive: true});
+
+    cleanBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (confirm("Session wirklich löschen?")) {
+            sessionLogs = [];
+            localStorage.removeItem('sinus_logs');
+            location.reload(); // Einfachste Methode zum Reset auf dem Handy
+        }
+    });
+}
 // Simulation section
 
 const canvas = document.getElementsByTagName('canvas')[0];
@@ -52,7 +57,13 @@ let sinusState = "STANDBY";
 let nextPhaseIsEinatmen = true;
 // --- DATEN-LOGGING ---
 // Lädt gespeicherte Daten oder startet mit einer leeren Liste
-let sessionLogs = JSON.parse(localStorage.getItem('sinus_logs') || '[]');
+let sessionLogs;
+try {
+    sessionLogs = JSON.parse(localStorage.getItem('sinus_logs') || '[]');
+} catch (e) {
+    console.error("LocalStorage ist blockiert:", e);
+    sessionLogs = []; // Fallback auf leere Liste
+}
 let phaseStartTime = Date.now();
 let sessionStartTime = Date.now();
 

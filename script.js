@@ -1927,7 +1927,7 @@ function togglePhase() {
         // Ein kurzer, knackiger Stoß beim Einatmen, 
         // zwei kurze beim Ausatmen für die Unterscheidung
         if (sinusState === "EINATMEN") {
-            navigator.vibrate(60); 
+            navigator.vibrate([100,50,100,50]); 
         } else {
             navigator.vibrate([30, 100, 30]); 
         }

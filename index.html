@@ -50,12 +50,7 @@
         z-index: 99;
         opacity: 0.5;
     }
-    #sensor-start
-  {
-    position: fixed; top: 20px; right: 140px; z-index: 102;  background: rgba(255,255,255,0.1);
-    color: rgba(255,255,255,0.8);
-    font-family: monospace;
-  }
+   
    #clean-session {
     position: fixed;
     top: 20px;
@@ -90,7 +85,7 @@
    <canvas></canvas>
 
     <button id="clean-session">CLEAN</button>
-    <button id="sensor-start">GYRO START</button>
+  
     <div id="ui-container">
         <div id="phase-label">BEREIT</div>
         <div style="width: 100%; height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden;">
@@ -103,6 +98,7 @@
     
     <canvas id="pulse-canvas"></canvas>
 
-    <script src="./script.js"></script>
+   <script src="./fluid-engine.js"></script>
+  
 </body>
 </html>

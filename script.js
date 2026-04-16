@@ -1919,6 +1919,15 @@ function togglePhase() {
         console.log(">> 1: EINATMEN (U-Turn -> Bernstein)");
     }
     
+    // 2. Die Vibration (Nur wenn das Handy es kann)
+    if (typeof navigator.vibrate === "function") {
+        if (sinusState === "EINATMEN") {
+            navigator.vibrate(60); // Bernstein-Stoß
+        } else {
+            navigator.vibrate([20, 30, 20, 30, 20]); // Blau-Surren
+        }
+    }
+    
     // SOFORTIGES Update der Farbe, nicht auf den Timer warten!
     if (pointers[0]) {
         pointers[0].color = generateColor();

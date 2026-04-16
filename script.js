@@ -179,7 +179,7 @@ function updateLiveUI() {
     timerDisplay.innerText = `${currentDuration.toFixed(2)}s / Ø ${avg.toFixed(2)}s`;
 }
 
-function logPhaseChange(previousPhase, currentPhase) {
+function logPhaseChange(previousPhase, sinusState) {
     let now = Date.now();
     let duration = (now - phaseStartTime) / 1000;
     
@@ -218,7 +218,7 @@ function handlePointerUp() {
 
 function triggerNotaus() {
     // Alles auf Null
-    currentPhase = "STANDBY";
+    sinusState = "STANDBY";
     playPing(220, 0.5); // Tiefer Bestätigungston
     if (navigator.vibrate) navigator.vibrate([100, 100, 100]);
     
@@ -1824,6 +1824,8 @@ window.addEventListener('mouseup', endTouch);
 window.addEventListener('touchend', endTouch);
 
 function startTouch(e) {
+    // Kurzes Signal beim ersten Auflegen
+    if (navigator.vibrate) navigator.vibrate(10);
     lastInteractionTime = Date.now(); // Zeitstempel aktualisieren
     let touch = e.touches ? e.touches[0] : e;
     lastX = touch.clientX;
@@ -1924,7 +1926,7 @@ function togglePhase() {
     if (navigator.vibrate) {
         // Ein kurzer, knackiger Stoß beim Einatmen, 
         // zwei kurze beim Ausatmen für die Unterscheidung
-        if (currentPhase === "EINATMEN") {
+        if (sinusState === "EINATMEN") {
             navigator.vibrate(40); 
         } else {
             navigator.vibrate([30, 50, 30]); 

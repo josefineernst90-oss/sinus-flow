@@ -1824,8 +1824,8 @@ window.addEventListener('mouseup', endTouch);
 window.addEventListener('touchend', endTouch);
 
 function startTouch(e) {
-    // Kurzes Signal beim ersten Auflegen
-    //if (navigator.vibrate) navigator.vibrate(10);
+    // UNLOCK: Schaltet die Vibration für den Rest der Session frei
+    if (navigator.vibrate) navigator.vibrate(0);
     lastInteractionTime = Date.now(); // Zeitstempel aktualisieren
     let touch = e.touches ? e.touches[0] : e;
     lastX = touch.clientX;

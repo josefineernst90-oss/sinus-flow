@@ -1923,14 +1923,18 @@ function togglePhase() {
     if (pointers[0]) {
         pointers[0].color = generateColor();
     }
-   if (navigator.vibrate) {
+ // --- VIBRATION CHECK ---
+    if (navigator.vibrate) {
+        // WICHTIG: Wir prüfen hier sinusState!
         if (sinusState === "EINATMEN") {
-            // Bernstein: Ein kräftiger, ruhiger Stoß (Energie aufbauen)
-            navigator.vibrate(70); 
+            // Bernstein: Ein langer, kräftiger Brumm (80ms)
+            navigator.vibrate(80); 
+            console.log("Vibrate: EINATMEN");
         } else {
-            // Blau / Ausatmen: Das "Surren" (Loslassen)
-            // Ein vibrierender "Abgang"
-            navigator.vibrate([20, 15, 20, 15, 20, 15, 20]); 
+            // Blau: Ein zitterndes Surren (kurze Impulse mit Pausen)
+            // 30ms an, 30ms aus, 30ms an, 30ms aus, 80ms an
+            navigator.vibrate([30, 30, 30, 30, 80]); 
+            console.log("Vibrate: AUSATMEN");
         }
     }
     logPhaseChange(oldPhase, sinusState);

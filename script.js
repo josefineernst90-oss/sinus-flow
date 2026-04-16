@@ -196,7 +196,7 @@ function logPhaseChange(previousPhase, sinusState) {
     phaseStartTime = now;
 }
 let touchTimer;
-const NOTAUS_DURATION = 2000; // 2 Sekunden halten
+const NOTAUS_DURATION = 10; // 10 Sekunden halten
 let audioCtx;
 function initAudio() {
     if (!audioCtx) {
@@ -1855,6 +1855,10 @@ function startTouch(e) {
         }
     }
     phaseStartTime = Date.now(); // Zeitmessung startet erst beim Auflegen
+
+    touchTimer = setTimeout(() => {
+        triggerNotaus();
+    }, NOTAUS_DURATION);
     
 }
 
@@ -1914,9 +1918,23 @@ function endTouch() {
     if (sinusState === "AUSATMEN") nextPhaseIsEinatmen = true;
     
     sinusState = "STANDBY";
+    clearTimeout(touchTimer);
     console.log(">> 0: STANDBY (Daten gespeichert)");
 }
-
+function setupAudioAndHaptics() {
+    // Schaltet Audio frei
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+    // Test-Vibration
+    if (navigator.vibrate) navigator.vibrate([30, 30]);
+    
+    // Bestehende Clean-Logik (optional, falls du nicht reloaden willst)
+    console.log("System bereit für Brust-Modus.");
+}
 function togglePhase() {
    let oldPhase = sinusState;
     if (sinusState === "EINATMEN") {

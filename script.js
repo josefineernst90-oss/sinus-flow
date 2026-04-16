@@ -1919,15 +1919,17 @@ function togglePhase() {
         console.log(">> 1: EINATMEN (U-Turn -> Bernstein)");
     }
     
-    // 2. Die Vibration (Nur wenn das Handy es kann)
-    if (typeof navigator.vibrate === "function") {
+    // 2. Die haptische Unterscheidung
+    if (navigator.vibrate) {
         if (sinusState === "EINATMEN") {
-            navigator.vibrate(60); // Bernstein-Stoß
+            // BERNSTEIN: Ein einzelner, tiefer "Brumm" (Energie tanken)
+            navigator.vibrate(70); 
         } else {
-            navigator.vibrate([20, 30, 20, 30, 20]); // Blau-Surren
+            // BLAU: Ein feines, schnelles Surren (Loslassen/Ausströmen)
+            // Kurze Impulse (15ms) mit minimalen Pausen (15ms)
+            navigator.vibrate([15, 15, 15, 15, 15, 15, 40]); 
         }
     }
-    
     // SOFORTIGES Update der Farbe, nicht auf den Timer warten!
     if (pointers[0]) {
         pointers[0].color = generateColor();

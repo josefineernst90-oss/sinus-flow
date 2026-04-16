@@ -1845,11 +1845,7 @@ function startTouch(e) {
         }
     }
     phaseStartTime = Date.now(); // Zeitmessung startet erst beim Auflegen
-   if (sinusState === "AUSATMEN") {
-    // Kurze Impulse (15ms) unterbrochen von Mini-Pausen (10ms)
-    // Erzeugt ein mechanisches Surren
-    navigator.vibrate([15, 10, 15, 10, 15, 10, 15, 10, 80]); 
-}
+    
 }
 
 function moveTouch(e) {
@@ -1927,14 +1923,14 @@ function togglePhase() {
     if (pointers[0]) {
         pointers[0].color = generateColor();
     }
-    // Haptischer Impuls beim Wechsel
-    if (navigator.vibrate) {
-        // Ein kurzer, knackiger Stoß beim Einatmen, 
-        // zwei kurze beim Ausatmen für die Unterscheidung
+   if (navigator.vibrate) {
         if (sinusState === "EINATMEN") {
-            navigator.vibrate([100,50,100,50]); 
+            // Bernstein: Ein kräftiger, ruhiger Stoß (Energie aufbauen)
+            navigator.vibrate(70); 
         } else {
-            navigator.vibrate([30, 100, 30]); 
+            // Blau / Ausatmen: Das "Surren" (Loslassen)
+            // Ein vibrierender "Abgang"
+            navigator.vibrate([20, 15, 20, 15, 20, 15, 20]); 
         }
     }
     logPhaseChange(oldPhase, sinusState);

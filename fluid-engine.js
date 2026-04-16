@@ -33,13 +33,6 @@ const statsDiv = document.getElementById('stats-display');
 const pulseCanvas = document.getElementById('pulse-canvas');
 const pCtx = pulseCanvas.getContext('2d');
 
-let lastToggleTime = 0; // Sperre gegen nervöses Springen
-
-// Stufe 2: Antizipation & Autopilot
-let autopilotActive = false;
-let isCalibrated = false;
-const REQUIRED_CYCLES = 5;
-
 const cleanBtn = document.getElementById('clean-session');
 if (cleanBtn) {
     cleanBtn.addEventListener('touchstart', (e) => {
@@ -1320,8 +1313,7 @@ function update () {
     render(null);
     
     updateLiveUI();
-    runAutopilot(); // Stufe 2 Logik
-    requestAnimationFrame(update);
+        requestAnimationFrame(update);
 }
 
 function calcDeltaTime () {

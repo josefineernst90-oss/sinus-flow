@@ -1824,9 +1824,19 @@ window.addEventListener('mouseup', endTouch);
 window.addEventListener('touchend', endTouch);
 
 function startTouch(e) {
-    // UNLOCK: Schaltet die Vibration für den Rest der Session frei
-    if (navigator.vibrate) navigator.vibrate(0);
-    lastInteractionTime = Date.now(); // Zeitstempel aktualisieren
+   
+    // 1. Audio-Kontext beim ersten Touch "entfesseln"
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+
+    // 2. Bestehende Vibration/Interaktion
+    if (navigator.vibrate) navigator.vibrate(20); 
+    lastInteractionTime = Date.now();
+
     let touch = e.touches ? e.touches[0] : e;
     lastX = touch.clientX;
     lastY = touch.clientY;
@@ -1906,33 +1916,25 @@ function endTouch() {
     sinusState = "STANDBY";
     console.log(">> 0: STANDBY (Daten gespeichert)");
 }
-document.getElementById('haptic-unlock').addEventListener('click', function() {
-    // Kurzes Rütteln zur Bestätigung
-    if (navigator.vibrate) {
-        navigator.vibrate([50, 30, 50]);
-    }
-    // Button verstecken, damit er nicht nervt
-    this.style.display = 'none';
-    console.log("Haptik für Session freigeschaltet!");
-});
+
 function togglePhase() {
    let oldPhase = sinusState;
     if (sinusState === "EINATMEN") {
         sinusState = "AUSATMEN";
         nextPhaseIsEinatmen = true; // Nach Ausatmen kommt wieder Einatmen
-        console.log(">> 3: AUSATMEN (U-Turn -> Blau)");
+        playPing(440, 0.1); // Tieferer Ton für Ausatmen (Beruhigung)
     } else {
         sinusState = "EINATMEN";
         nextPhaseIsEinatmen = false; // Nach Einatmen kommt wieder Ausatmen
-        console.log(">> 1: EINATMEN (U-Turn -> Bernstein)");
+       playPing(660, 0.1); // Mittlerer Ton für Einatmen (Fokus)
     }
     
-  // HIER KOMMT DIE MAGIE
+  // Deine bestehende Vibrations-Logik
     if (navigator.vibrate) {
         if (sinusState === "EINATMEN") {
-            navigator.vibrate(80); // Bernstein: Kräftiger Stoß
+            navigator.vibrate(60); 
         } else {
-            navigator.vibrate([20, 30, 20, 30, 80]); // Blau: Surren
+            navigator.vibrate([15, 15, 40]); 
         }
     }
     // SOFORTIGES Update der Farbe, nicht auf den Timer warten!

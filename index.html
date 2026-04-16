@@ -82,7 +82,7 @@
 
    <canvas></canvas>
 
-    <button id="clean-session">SESSION CLEAN</button>
+    <button id="clean-session" onclick="setupAudioAndHaptics()">SYSTEM START / CLEAN</button>
 
     <div id="ui-container">
         <div id="phase-label">BEREIT</div>
@@ -93,9 +93,7 @@
     </div>
 
     <div id="stats-display">BEREIT</div>
-    <button id="haptic-unlock" class="control-btn" style="background: #ff9600; color: #000; font-weight: bold;">
-        HAPTIK START
-    </button>
+    
     <canvas id="pulse-canvas"></canvas>
 
     <script src="./script.js"></script>

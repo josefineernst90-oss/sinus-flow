@@ -1825,7 +1825,7 @@ window.addEventListener('touchend', endTouch);
 
 function startTouch(e) {
     // Kurzes Signal beim ersten Auflegen
-    if (navigator.vibrate) navigator.vibrate(200);
+    if (navigator.vibrate) navigator.vibrate(10);
     lastInteractionTime = Date.now(); // Zeitstempel aktualisieren
     let touch = e.touches ? e.touches[0] : e;
     lastX = touch.clientX;
@@ -1927,9 +1927,9 @@ function togglePhase() {
         // Ein kurzer, knackiger Stoß beim Einatmen, 
         // zwei kurze beim Ausatmen für die Unterscheidung
         if (sinusState === "EINATMEN") {
-            navigator.vibrate(40); 
+            navigator.vibrate(60); 
         } else {
-            navigator.vibrate([30, 50, 30]); 
+            navigator.vibrate([30, 100, 30]); 
         }
     }
     logPhaseChange(oldPhase, sinusState);

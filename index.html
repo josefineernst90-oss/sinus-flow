@@ -93,7 +93,7 @@
     </div>
 
     <div id="stats-display">BEREIT</div>
-    <button onclick="navigator.vibrate([100, 50, 100])" style="position:fixed; top:80px; right:20px; z-index:9999; background:red; color:white;">
+    <button onclick="if(navigator.vibrate) { navigator.vibrate(200); console.log('Vibrate!'); } else { alert('Vibration nicht unterstützt'); ">
     VIBRATIONS TEST
 </button>
     <canvas id="pulse-canvas"></canvas>

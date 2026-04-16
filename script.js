@@ -1919,15 +1919,14 @@ function togglePhase() {
         console.log(">> 1: EINATMEN (U-Turn -> Bernstein)");
     }
     
-    // 2. Die haptische Unterscheidung
+  // HIER KOMMT DIE MAGIE
     if (navigator.vibrate) {
         if (sinusState === "EINATMEN") {
-            // BERNSTEIN: Ein einzelner, tiefer "Brumm" (Energie tanken)
-            navigator.vibrate(70); 
+            // Bernstein: Ein kräftiger Stoß
+            navigator.vibrate(60); 
         } else {
-            // BLAU: Ein feines, schnelles Surren (Loslassen/Ausströmen)
-            // Kurze Impulse (15ms) mit minimalen Pausen (15ms)
-            navigator.vibrate([15, 15, 15, 15, 15, 15, 40]); 
+            // Blau: Ein feines Surren
+            navigator.vibrate([15, 15, 15, 15, 40]); 
         }
     }
     // SOFORTIGES Update der Farbe, nicht auf den Timer warten!

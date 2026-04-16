@@ -220,7 +220,7 @@ function triggerNotaus() {
     // Alles auf Null
     sinusState = "STANDBY";
     playPing(220, 0.5); // Tiefer Bestätigungston
-    if (navigator.vibrate) navigator.vibrate([100, 100, 100]);
+   // if (navigator.vibrate) navigator.vibrate([100, 100, 100]);
     
     console.log("NOTAUS aktiviert - System im Sinus 0 Modus");
     // Hier könntest du auch die Session-Zusammenfassung direkt anzeigen
@@ -1825,7 +1825,7 @@ window.addEventListener('touchend', endTouch);
 
 function startTouch(e) {
     // Kurzes Signal beim ersten Auflegen
-    if (navigator.vibrate) navigator.vibrate(10);
+    //if (navigator.vibrate) navigator.vibrate(10);
     lastInteractionTime = Date.now(); // Zeitstempel aktualisieren
     let touch = e.touches ? e.touches[0] : e;
     lastX = touch.clientX;
@@ -1923,20 +1923,18 @@ function togglePhase() {
     if (pointers[0]) {
         pointers[0].color = generateColor();
     }
- // --- VIBRATION CHECK ---
     if (navigator.vibrate) {
-        // WICHTIG: Wir prüfen hier sinusState!
-        if (sinusState === "EINATMEN") {
-            // Bernstein: Ein langer, kräftiger Brumm (80ms)
-            navigator.vibrate(100); 
-            console.log("Vibrate: EINATMEN");
-        } else {
-            // Blau: Ein zitterndes Surren (kurze Impulse mit Pausen)
-            // 30ms an, 30ms aus, 30ms an, 30ms aus, 80ms an
-            navigator.vibrate([100, 100, 100, 100, 100]); 
-            console.log("Vibrate: AUSATMEN");
-        }
+    // Wir löschen alle laufenden Vibrationen, bevor wir neu starten
+    navigator.vibrate(0); 
+
+    if (sinusState === "EINATMEN") {
+        // Bernstein-Start: Ein kräftiger Impuls
+        navigator.vibrate(60); 
+    } else if (sinusState === "AUSATMEN") {
+        // Blau-Start: Ein zittriges Surren
+        navigator.vibrate([20, 30, 20, 30, 20]); 
     }
+}
     logPhaseChange(oldPhase, sinusState);
 }
 

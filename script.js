@@ -126,9 +126,6 @@ pointers.push(new pointerPrototype());
 
 const { gl, ext } = getWebGLContext(canvas);
 
-if (isMobile()) {
-    config.DYE_RESOLUTION = 512;
-}
 if (!ext.supportLinearFiltering) {
     config.DYE_RESOLUTION = 512;
     config.SHADING = false;
@@ -361,9 +358,7 @@ function supportRenderTextureFormat (gl, internalFormat, format, type) {
 
 
 
-function isMobile () {
-    return /Mobi|Android/i.test(navigator.userAgent);
-}
+
 
 function captureScreenshot () {
     let res = getResolution(config.CAPTURE_RESOLUTION);

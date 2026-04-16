@@ -24,36 +24,14 @@ SOFTWARE.
 
 'use strict';
 
-// Mobile promo section
-
-const promoPopup = document.getElementsByClassName('promo')[0];
-const promoPopupClose = document.getElementsByClassName('promo-close')[0];
-
-if (isMobile()) {
-    setTimeout(() => {
-        promoPopup.style.display = 'table';
-    }, 20000);
-}
-
-promoPopupClose.addEventListener('click', e => {
-    promoPopup.style.display = 'none';
-});
+// Neue UI-Elemente referenzieren
+const progressBar = document.getElementById('progress-bar');
+const timerDisplay = document.getElementById('timer-display');
+const phaseLabel = document.getElementById('phase-label');
 
 const statsDiv = document.getElementById('stats-display');
 const pulseCanvas = document.getElementById('pulse-canvas');
 const pCtx = pulseCanvas.getContext('2d');
-
-const appleLink = document.getElementById('apple_link');
-appleLink.addEventListener('click', e => {
-    ga('send', 'event', 'link promo', 'app');
-    window.open('https://apps.apple.com/us/app/fluid-simulation/id1443124993');
-});
-
-const googleLink = document.getElementById('google_link');
-googleLink.addEventListener('click', e => {
-    ga('send', 'event', 'link promo', 'app');
-    window.open('https://play.google.com/store/apps/details?id=games.paveldogreat.fluidsimfree');
-});
 
 // Simulation section
 
@@ -136,7 +114,51 @@ if (!ext.supportLinearFiltering) {
     config.SUNRAYS = false;
 }
 
-startGUI();
+function updateLiveUI() {
+    if (sinusState === "STANDBY") {
+        progressBar.style.width = "0%";
+        
+        // Die "Vorschau" Logik: Was passiert als nächstes?
+        if (nextPhaseIsEinatmen) {
+            phaseLabel.innerText = "BEREIT: EINATMEN";
+            phaseLabel.style.color = "rgba(255, 150, 0, 0.5)"; // Bernstein, aber blasser
+        } else {
+            phaseLabel.innerText = "BEREIT: AUSATMEN";
+            phaseLabel.style.color = "rgba(0, 170, 255, 0.5)"; // Blau, aber blasser
+        }
+        return;
+    }
+
+    // Zeit seit Phasenbeginn
+    let currentDuration = (Date.now() - phaseStartTime) / 1000;
+    
+    // Den passenden Durchschnitt finden
+    let relevantLogs = sessionLogs.filter(e => e.phase === sinusState);
+    let avg = 0;
+    if (relevantLogs.length > 0) {
+        avg = relevantLogs.reduce((acc, e) => acc + e.duration, 0) / relevantLogs.length;
+    } else {
+        avg = 5.0; // Standardwert für den ersten Durchgang
+    }
+
+    // Fortschritt berechnen
+    let progress = (currentDuration / avg) * 100;
+    
+    // UI-Update
+    phaseLabel.innerText = sinusState;
+    phaseLabel.style.color = sinusState === "EINATMEN" ? "#ff9600" : "#00aaff";
+    
+    // Balken-Farbe ändern, wenn man über dem Durchschnitt ist
+    if (progress > 100) {
+        progressBar.style.background = "#00ff7f"; // Grün für "Übererfüllung"
+        progressBar.style.width = "100%"; 
+    } else {
+        progressBar.style.background = sinusState === "EINATMEN" ? "#ff9600" : "#00aaff";
+        progressBar.style.width = progress + "%";
+    }
+
+    timerDisplay.innerText = `${currentDuration.toFixed(2)}s / Ø ${avg.toFixed(2)}s`;
+}
 
 function logPhaseChange(previousPhase, currentPhase) {
     let now = Date.now();
@@ -268,80 +290,7 @@ function supportRenderTextureFormat (gl, internalFormat, format, type) {
     return status == gl.FRAMEBUFFER_COMPLETE;
 }
 
-function startGUI () {
-    var gui = new dat.GUI({ width: 300 });
-    gui.add(config, 'DYE_RESOLUTION', { 'high': 1024, 'medium': 512, 'low': 256, 'very low': 128 }).name('quality').onFinishChange(initFramebuffers);
-    gui.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
-    gui.add(config, 'DENSITY_DISSIPATION', 0, 4.0).name('density diffusion');
-    gui.add(config, 'VELOCITY_DISSIPATION', 0, 4.0).name('velocity diffusion');
-    gui.add(config, 'PRESSURE', 0.0, 1.0).name('pressure');
-    gui.add(config, 'CURL', 0, 50).name('vorticity').step(1);
-    gui.add(config, 'SPLAT_RADIUS', 0.01, 1.0).name('splat radius');
-    gui.add(config, 'SHADING').name('shading').onFinishChange(updateKeywords);
-    gui.add(config, 'COLORFUL').name('colorful');
-    gui.add(config, 'PAUSED').name('paused').listen();
 
-    gui.add({ fun: () => {
-        splatStack.push(parseInt(Math.random() * 20) + 5);
-    } }, 'fun').name('Random splats');
-
-    let bloomFolder = gui.addFolder('Bloom');
-    bloomFolder.add(config, 'BLOOM').name('enabled').onFinishChange(updateKeywords);
-    bloomFolder.add(config, 'BLOOM_INTENSITY', 0.1, 2.0).name('intensity');
-    bloomFolder.add(config, 'BLOOM_THRESHOLD', 0.0, 1.0).name('threshold');
-
-    let sunraysFolder = gui.addFolder('Sunrays');
-    sunraysFolder.add(config, 'SUNRAYS').name('enabled').onFinishChange(updateKeywords);
-    sunraysFolder.add(config, 'SUNRAYS_WEIGHT', 0.3, 1.0).name('weight');
-
-    let captureFolder = gui.addFolder('Capture');
-    captureFolder.addColor(config, 'BACK_COLOR').name('background color');
-    captureFolder.add(config, 'TRANSPARENT').name('transparent');
-    captureFolder.add({ fun: captureScreenshot }, 'fun').name('take screenshot');
-
-    let github = gui.add({ fun : () => {
-        window.open('https://github.com/PavelDoGreat/WebGL-Fluid-Simulation');
-        ga('send', 'event', 'link button', 'github');
-    } }, 'fun').name('Github');
-    github.__li.className = 'cr function bigFont';
-    github.__li.style.borderLeft = '3px solid #8C8C8C';
-    let githubIcon = document.createElement('span');
-    github.domElement.parentElement.appendChild(githubIcon);
-    githubIcon.className = 'icon github';
-
-    let twitter = gui.add({ fun : () => {
-        ga('send', 'event', 'link button', 'twitter');
-        window.open('https://twitter.com/PavelDoGreat');
-    } }, 'fun').name('Twitter');
-    twitter.__li.className = 'cr function bigFont';
-    twitter.__li.style.borderLeft = '3px solid #8C8C8C';
-    let twitterIcon = document.createElement('span');
-    twitter.domElement.parentElement.appendChild(twitterIcon);
-    twitterIcon.className = 'icon twitter';
-
-    let discord = gui.add({ fun : () => {
-        ga('send', 'event', 'link button', 'discord');
-        window.open('https://discordapp.com/invite/CeqZDDE');
-    } }, 'fun').name('Discord');
-    discord.__li.className = 'cr function bigFont';
-    discord.__li.style.borderLeft = '3px solid #8C8C8C';
-    let discordIcon = document.createElement('span');
-    discord.domElement.parentElement.appendChild(discordIcon);
-    discordIcon.className = 'icon discord';
-
-    let app = gui.add({ fun : () => {
-        ga('send', 'event', 'link button', 'app');
-        window.open('http://onelink.to/5b58bn');
-    } }, 'fun').name('Check out mobile app');
-    app.__li.className = 'cr function appBigFont';
-    app.__li.style.borderLeft = '3px solid #00FF7F';
-    let appIcon = document.createElement('span');
-    app.domElement.parentElement.appendChild(appIcon);
-    appIcon.className = 'icon app';
-
-    if (isMobile())
-        gui.close();
-}
 
 function isMobile () {
     return /Mobi|Android/i.test(navigator.userAgent);
@@ -1250,7 +1199,7 @@ function applyStandbyDrift() {
     let timeSinceLastTouch = Date.now() - lastInteractionTime;
     
     // 60.000 ms = 1 Minute
-    if (timeSinceLastTouch < 60000) {
+    if (timeSinceLastTouch < 10000) {
         return; // Wir brechen hier ab, das Display bleibt schwarz
     }
 
@@ -1309,6 +1258,7 @@ function update () {
     if (!config.PAUSED)
         step(dt);
     render(null);
+    updateLiveUI();
     requestAnimationFrame(update);
 }
 
@@ -1832,80 +1782,81 @@ function startTouch(e) {
 }
 
 function moveTouch(e) {
-    lastInteractionTime = Date.now(); // Zeitstempel aktualisieren
+    lastInteractionTime = Date.now();
     if (lastX === null || lastY === null) return;
     
     let touch = e.touches ? e.touches[0] : e;
-    let currentX = touch.clientX;
-    let currentY = touch.clientY;
-    
-    let dx = currentX - lastX;
-    let dy = currentY - lastY;
-    
-    // Distanz berechnen (Satz des Pythagoras)
+    let dx = touch.clientX - lastX;
+    let dy = touch.clientY - lastY;
     let distance = Math.sqrt(dx * dx + dy * dy);
-    
-    // DEADZONE: Ignoriere extremes Zittern oder Mikrobewegungen (< 4 Pixel)
+
+    // Wenn der Finger sich kaum bewegt, "verblasst" die Vektor-Erinnerung langsam
+    if (distance < 2) {
+        vectorX *= 0.9; 
+        vectorY *= 0.9;
+    }
+
     if (distance > 4) {
-        
-        // Wenn wir bereits fließen, vergleiche die Richtung
         if (vectorX !== 0 || vectorY !== 0) {
-            
-            // Das "Dot Product" vergleicht zwei Pfeile. 
-            // -1 bedeutet: Exakt 180 Grad entgegengesetzt.
+            // Die mathematische Prüfung des Winkels (Skalarprodukt)
+            // cosTheta = \frac{\vec{a} \cdot \vec{b}}{|\vec{a}| \cdot |\vec{b}|}
             let dotProduct = (dx * vectorX) + (dy * vectorY);
             let len1 = distance;
             let len2 = Math.sqrt(vectorX * vectorX + vectorY * vectorY);
             let cosTheta = dotProduct / (len1 * len2);
-            
-            // Wenn der Haken schärfer als ca. 135 Grad ist (cosTheta < -0.7) -> U-TURN!
+
             if (cosTheta < -0.7) {
                 togglePhase();
-                // Nach dem Turn den Vektor sofort auf die neue Richtung zwingen
                 vectorX = dx;
                 vectorY = dy;
             } else {
-                // Fließender Übergang: Wir glätten den Pfeil leicht (Trägheit)
-                // Dadurch wird flüssiges Kreisen nicht als U-Turn gewertet.
                 vectorX = (vectorX * 0.8) + (dx * 0.2);
                 vectorY = (vectorY * 0.8) + (dy * 0.2);
             }
-            
         } else {
-            // Der allererste Wisch nach dem Berühren definiert die Startrichtung
             vectorX = dx;
             vectorY = dy;
         }
-        
-        lastX = currentX;
-        lastY = currentY;
+        lastX = touch.clientX;
+        lastY = touch.clientY;
     }
 }
 
 function endTouch() {
+   if (sinusState !== "STANDBY") {
+        logPhaseChange(sinusState, "STANDBY");
+    }
+
     lastX = null;
     lastY = null;
     vectorX = 0;
     vectorY = 0;
     
-    // Bereite die nächste Phase für das nächste Berühren vor
+    // Bereite die nächste Phase vor
     if (sinusState === "EINATMEN") nextPhaseIsEinatmen = false;
     if (sinusState === "AUSATMEN") nextPhaseIsEinatmen = true;
     
     sinusState = "STANDBY";
-    console.log(">> 0: STANDBY (Finger gelöst)");
+    console.log(">> 0: STANDBY (Daten gespeichert)");
 }
 
 function togglePhase() {
-    let oldPhase = sinusState;
+   let oldPhase = sinusState;
     if (sinusState === "EINATMEN") {
         sinusState = "AUSATMEN";
-        console.log(">> 3: AUSATMEN (180° Haken -> Blau)");
+        nextPhaseIsEinatmen = true; // Nach Ausatmen kommt wieder Einatmen
+        console.log(">> 3: AUSATMEN (U-Turn -> Blau)");
     } else {
         sinusState = "EINATMEN";
-        console.log(">> 1: EINATMEN (180° Haken -> Bernstein)");
+        nextPhaseIsEinatmen = false; // Nach Einatmen kommt wieder Ausatmen
+        console.log(">> 1: EINATMEN (U-Turn -> Bernstein)");
     }
-    // Protokoll schreiben
+    
+    // SOFORTIGES Update der Farbe, nicht auf den Timer warten!
+    if (pointers[0]) {
+        pointers[0].color = generateColor();
+    }
+    
     logPhaseChange(oldPhase, sinusState);
 }
 

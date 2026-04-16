@@ -196,7 +196,7 @@ function logPhaseChange(previousPhase, sinusState) {
     phaseStartTime = now;
 }
 let touchTimer;
-
+const NOTAUS_DURATION = 2000; // 2 Sekunden halten
 let audioCtx;
 function initAudio() {
     if (!audioCtx) {
@@ -206,7 +206,9 @@ function initAudio() {
 function handlePointerDown(e) {
     initAudio(); // Audio aktivieren
     // ...
-  
+    touchTimer = setTimeout(() => {
+        triggerNotaus();
+    }, NOTAUS_DURATION);
 }
 
 function handlePointerUp() {
@@ -214,7 +216,15 @@ function handlePointerUp() {
     // ...
 }
 
-
+function triggerNotaus() {
+    // Alles auf Null
+    sinusState = "STANDBY";
+    playPing(220, 0.5); // Tiefer Bestätigungston
+   // if (navigator.vibrate) navigator.vibrate([100, 100, 100]);
+    
+    console.log("NOTAUS aktiviert - System im Sinus 0 Modus");
+    // Hier könntest du auch die Session-Zusammenfassung direkt anzeigen
+}
 function playPing(frequency = 880, duration = 0.1) {
     if (!audioCtx) return;
     const osc = audioCtx.createOscillator();
@@ -1814,19 +1824,9 @@ window.addEventListener('mouseup', endTouch);
 window.addEventListener('touchend', endTouch);
 
 function startTouch(e) {
-   
-    // 1. Audio-Kontext beim ersten Touch "entfesseln"
-    if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    if (audioCtx.state === 'suspended') {
-        audioCtx.resume();
-    }
-
-    // 2. Bestehende Vibration/Interaktion
-    if (navigator.vibrate) navigator.vibrate(20); 
-    lastInteractionTime = Date.now();
-
+    // UNLOCK: Schaltet die Vibration für den Rest der Session frei
+    if (navigator.vibrate) navigator.vibrate(0);
+    lastInteractionTime = Date.now(); // Zeitstempel aktualisieren
     let touch = e.touches ? e.touches[0] : e;
     lastX = touch.clientX;
     lastY = touch.clientY;
@@ -1845,8 +1845,6 @@ function startTouch(e) {
         }
     }
     phaseStartTime = Date.now(); // Zeitmessung startet erst beim Auflegen
-
- 
     
 }
 
@@ -1906,7 +1904,6 @@ function endTouch() {
     if (sinusState === "AUSATMEN") nextPhaseIsEinatmen = true;
     
     sinusState = "STANDBY";
-    clearTimeout(touchTimer);
     console.log(">> 0: STANDBY (Daten gespeichert)");
 }
 
@@ -1915,19 +1912,19 @@ function togglePhase() {
     if (sinusState === "EINATMEN") {
         sinusState = "AUSATMEN";
         nextPhaseIsEinatmen = true; // Nach Ausatmen kommt wieder Einatmen
-        playPing(440, 0.1); // Tieferer Ton für Ausatmen (Beruhigung)
+        console.log(">> 3: AUSATMEN (U-Turn -> Blau)");
     } else {
         sinusState = "EINATMEN";
         nextPhaseIsEinatmen = false; // Nach Einatmen kommt wieder Ausatmen
-       playPing(660, 0.1); // Mittlerer Ton für Einatmen (Fokus)
+        console.log(">> 1: EINATMEN (U-Turn -> Bernstein)");
     }
     
-  // Deine bestehende Vibrations-Logik
+  // HIER KOMMT DIE MAGIE
     if (navigator.vibrate) {
         if (sinusState === "EINATMEN") {
-            navigator.vibrate(60); 
+            navigator.vibrate(80); // Bernstein: Kräftiger Stoß
         } else {
-            navigator.vibrate([15, 15, 40]); 
+            navigator.vibrate([20, 30, 20, 30, 80]); // Blau: Surren
         }
     }
     // SOFORTIGES Update der Farbe, nicht auf den Timer warten!
@@ -1993,77 +1990,5 @@ function exportSessionData() {
 }
 function saveLogsToStorage() {
     localStorage.setItem('sinus_logs', JSON.stringify(sessionLogs));
-}
-
-
-
-
-let lastBeta = 0;
-let gyroActive = false;
-let gyroThreshold = 0.5; // Empfindlichkeit: Wie viel Grad Kippung braucht einen Wechsel?
-
-const sensorBtn = document.getElementById('sensor-start');
-
-sensorBtn.addEventListener('click', function() {
-    // Permission-Abfrage für iOS
-    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-        DeviceOrientationEvent.requestPermission()
-            .then(permissionState => {
-                if (permissionState === 'granted') {
-                    startGyro();
-                }
-            })
-            .catch(console.error);
-    } else {
-        // Android oder Desktop (keine explizite Permission nötig)
-        startGyro();
-    }
-});
-
-function startGyro() {
-    gyroActive = !gyroActive;
-    sensorBtn.innerHTML = gyroActive ? "GYRO AKTIV" : "GYRO START";
-    sensorBtn.style.background = gyroActive ? "rgba(0,255,127,0.3)" : "rgba(0,255,127,0.1)";
-
-    if (gyroActive) {
-        window.addEventListener('deviceorientation', handleOrientation);
-        // Wir gehen in den Modus: Erstes Einatmen startet beim Aktivieren
-        if (sinusState === "STANDBY") {
-            sinusState = nextPhaseIsEinatmen ? "EINATMEN" : "AUSATMEN";
-            phaseStartTime = Date.now();
-        }
-    } else {
-        window.removeEventListener('deviceorientation', handleOrientation);
-        sinusState = "STANDBY";
-    }
-}
-
-function handleOrientation(event) {
-    if (!gyroActive) return;
-
-    let beta = event.beta; // Kippen nach vorn/hinten (-180 bis 180)
-    let diff = beta - lastBeta;
-
-    // Erkennung der Richtungsänderung (U-Turn durch Bewegung)
-    // Wenn die Bewegung groß genug ist und sich die Richtung umkehrt
-    if (Math.abs(diff) > 0.1) { // Rauschfilter
-        
-        // Logik: Wenn wir einatmen und das Handy anfängt, sich in die Gegenrichtung zu neigen
-        if (sinusState === "EINATMEN" && diff < -gyroThreshold) {
-            togglePhase();
-        } 
-        else if (sinusState === "AUSATMEN" && diff > gyroThreshold) {
-            togglePhase();
-        }
-
-        // Wir simulieren einen "virtuellen Finger" für die Fluid-Splat-Effekte
-        // Damit der Honig-Flow auch ohne Touch weiterfließt
-        let virtualX = 0.5 + (event.gamma / 90); // Neigung links/rechts bewegt den Flow
-        let virtualY = 0.5 + (event.beta / 90);
-        
-        splat(virtualX, virtualY, diff * 50, diff * 50, generateColor());
-    }
-
-    lastBeta = beta;
 }
 ;

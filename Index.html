@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Sinus 0 - Breathing Sphere</title>
+    <style>
+        :root { --scale: 1.0; --color: #ff9600; --glow: rgba(255, 150, 0, 0.5); }
+        
+        body { 
+            margin: 0; background: #000; color: white; 
+            font-family: monospace; overflow: hidden;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            height: 100vh; width: 100vw;
+        }
+
+        /* Die atmende Kugel */
+        #sphere {
+            width: 200px; height: 200px;
+            background: var(--color);
+            border-radius: 50%;
+            box-shadow: 0 0 100px var(--glow);
+            transform: scale(var(--scale));
+            transition: transform 0.1s ease-out, background 0.5s ease;
+        }
+
+        /* UI Panel */
+        #ui { position: fixed; top: 20px; display: flex; gap: 10px; z-index: 10; }
+        #debug { position: fixed; bottom: 20px; font-size: 12px; color: #444; }
+
+        button { 
+            background: #222; border: 1px solid #444; color: #aaa; 
+            padding: 15px; cursor: pointer; border-radius: 8px;
+        }
+        button.active { border-color: #00ff7f; color: #00ff7f; }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <button id="btn-gyro">MOBILE GYRO</button>
+        <button id="btn-xiao">PC XIAO (USB)</button>
+    </div>
+
+    <div id="sphere"></div>
+
+    <div id="debug">Warte auf Signal...</div>
+
+    <script>
+        const sphere = document.getElementById('sphere');
+        const debug = document.getElementById('debug');
+        let sinusState = "STANDBY";
+
+        // --- HAPTIK & SOUND ---
+        let audioCtx;
+        function playTone(freq) {
+            if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.frequency.value = freq;
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.5);
+        }
+
+        // --- GRAPHIK UPDATE ---
+        function updateVisuals(amplitude) {
+            // Amplitude mappen auf Skalierung (0.8 bis 2.0)
+            let s = 1.0 + (amplitude * 0.5);
+            document.documentElement.style.setProperty('--scale', s);
+            
+            if (amplitude > 0.05) {
+                document.documentElement.style.setProperty('--color', '#ff9600');
+                document.documentElement.style.setProperty('--glow', 'rgba(255, 150, 0, 0.5)');
+            } else if (amplitude < -0.05) {
+                document.documentElement.style.setProperty('--color', '#00aaff');
+                document.documentElement.style.setProperty('--glow', 'rgba(0, 170, 255, 0.5)');
+            }
+        }
+
+        // --- MOBILE GYRO LOGIK ---
+        document.getElementById('btn-gyro').addEventListener('click', async () => {
+            if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                const res = await DeviceMotionEvent.requestPermission();
+                if (res !== 'granted') return;
+            }
+            window.addEventListener('devicemotion', (e) => {
+                let z = e.accelerationIncludingGravity.z;
+                let amp = (z - 9.81) * 0.5; // Einfache Differenz
+                updateVisuals(amp);
+                debug.innerText = "GYRO Z: " + amp.toFixed(3);
+            });
+            document.getElementById('btn-gyro').classList.add('active');
+        });
+
+        // --- PC XIAO LOGIK ---
+        document.getElementById('btn-xiao').addEventListener('click', async () => {
+            const port = await navigator.serial.requestPort();
+            await port.open({ baudRate: 115200 });
+            document.getElementById('btn-xiao').classList.add('active');
+
+            const decoder = new TextDecoderStream();
+            port.readable.pipeTo(decoder.writable);
+            const reader = decoder.readable.getReader();
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                let amp = parseFloat(value);
+                if (!isNaN(amp)) {
+                    updateVisuals(amp);
+                    debug.innerText = "XIAO AMP: " + amp.toFixed(3);
+                }
+            }
+        });
+    </script>
+</body>
+</html>

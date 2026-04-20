@@ -132,6 +132,20 @@ if (!ext.supportLinearFiltering) {
     config.BLOOM = false;
     config.SUNRAYS = false;
 }
+function runAutopilot() {
+    if (!autopilotActive || sinusState === "STANDBY") return;
+    
+    let currentDuration = (Date.now() - phaseStartTime) / 1000;
+    let relevantLogs = sessionLogs.filter(e => e.phase === sinusState);
+    let avg = relevantLogs.length > 0 
+        ? relevantLogs.reduce((acc, e) => acc + e.duration, 0) / relevantLogs.length 
+        : 5.0;
+
+    // Das Handy führt den Wechsel aus, wenn der Durchschnitt erreicht ist
+    if (currentDuration >= avg) {
+        togglePhase();
+    }
+}						 
 
 function updateLiveUI() {
     if (sinusState === "STANDBY") {

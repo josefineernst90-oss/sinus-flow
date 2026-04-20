@@ -1998,23 +1998,30 @@ function saveLogsToStorage() {
 function handleChestMotion(event) {
     if (!gyroActive) return;
     
-    // Z-Achse ist die Tiefe (Brustkorb heben/senken)
     let z = event.accelerationIncludingGravity.z;
     if (z === null) return;
 
-    // Glättungs-Filter (Low Pass)
     let alpha = 0.1;
     let filteredZ = alpha * z + (1 - alpha) * lastZ;
     let delta = filteredZ - lastZ;
 
-    // U-Turn Logik: Wenn die Bewegungsrichtung kippt
-    if (sinusState === "EINATMEN" && delta < -gyroThreshold) {
+    // KICKSTART: Wenn wir im Standby sind und Bewegung spüren, fangen wir an
+    if (sinusState === "STANDBY") {
+        if (Math.abs(delta) > gyroThreshold) {
+            sinusState = nextPhaseIsEinatmen ? "EINATMEN" : "AUSATMEN";
+            phaseStartTime = Date.now();
+            playPing(sinusState === "EINATMEN" ? 660 : 440);
+        }
+    } 
+    // NORMALE LOGIK: U-Turn Erkennung
+    else if (sinusState === "EINATMEN" && delta < -gyroThreshold) {
         togglePhase();
-    } else if (sinusState === "AUSATMEN" && delta > gyroThreshold) {
+    } 
+    else if (sinusState === "AUSATMEN" && delta > gyroThreshold) {
         togglePhase();
     }
     
-    // Kleiner visueller Impuls in der Mitte passend zur Bewegung
+    // Optisches Feedback: Der Honig reagiert auf die Stärke deines Atems
     if (Math.abs(delta) > 0.05) {
         splat(0.5, 0.5, 0, 0, generateColor());
     }

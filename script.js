@@ -26,6 +26,7 @@ SOFTWARE.
 // --- 3D-SURFACE MAPPING VARIABLEN ---
 // Diese Werte brauchen einen Start-Wert, damit die Mathe nicht bei 0 hängen bleibt
 let averageZ = 9.81; 
+let driftAlpha = 0.01; // Standard-Drift (langsam)
 let smoothZ = 9.81;
 let lastZ = 9.81;
 let sensitivityGain = 80.0;
@@ -37,6 +38,8 @@ let nextPhaseIsEinatmen = true;
 let lastInteractionTime = Date.now();
 let phaseStartTime = Date.now();
 let lastToggleTime = Date.now();
+let holdThreshold = 0.04; // Bereich, in dem "Luftanhalten" erkannt wird
+let holdStartCounter = 0; // Timer, um Fehl-Trigger zu vermeiden
 
 // Gyro-Sync Logik
 let gyroActive = false;
@@ -2012,36 +2015,52 @@ function saveLogsToStorage() {
 }
 // --- ATEM-ERKENNUNG (DIE BRÜCKE) ---
 function handleChestMotion(event) {
-   if (!gyroActive) return;
+    if (!gyroActive) return;
     
     let acc = event.accelerationIncludingGravity;
-    // Sicherheits-Check: Falls der Sensor noch keine Daten liefert, brich ab
-    if (!acc || acc.z === null || isNaN(acc.z)) return;
+    if (!acc || acc.z === null) return;
 
-    // Sanfte Filterung
-    let alpha = 0.08;
-    smoothZ = (alpha * acc.z) + ((1 - alpha) * smoothZ);
-    averageZ = (0.005 * acc.z) + ((1 - 0.005) * averageZ);
+    // 1. DYNAMISCHE NULLPUNKT-KALIBRIERUNG (wie gehabt)
+    let currentAlpha = (sinusState === "STANDBY") ? 0.2 : 0.005;
+    averageZ = (currentAlpha * acc.z) + ((1 - currentAlpha) * averageZ);
 
-    let amplitude = (smoothZ - averageZ) * sensitivityGain;
+    // 2. DIE AMPLITUDE
+    let amplitude = (acc.z - averageZ) * sensitivityGain;
 
-    // Hier passiert die Magie
-    if (sinusState === "STANDBY") {
-        if (Math.abs(amplitude) > 0.5) { // Braucht einen kleinen "Weckruf"
-            sinusState = nextPhaseIsEinatmen ? "EINATMEN" : "AUSATMEN";
-            phaseStartTime = Date.now();
+    // 3. LUFTANHALTEN-ERKENNUNG (Die "Null-Zone")
+    if (Math.abs(amplitude) < holdThreshold && sinusState !== "STANDBY") {
+        holdStartCounter++;
+        
+        // Wenn du für ca. 0.5 Sekunden (bei 60fps ca. 30 Frames) still hältst
+        if (holdStartCounter > 30 && sinusState !== "HALTEN") {
+            let previousState = sinusState;
+            sinusState = "HALTEN";
+            logPhaseChange(previousState); // Loggt die beendete Atemphase
+            if (navigator.vibrate) navigator.vibrate([10, 10]); // Ganz sanftes Ticken
         }
     } else {
+        holdStartCounter = 0; // Bei Bewegung wird der Counter sofort zurückgesetzt
+        
+        // Wenn wir aus dem "HALTEN" kommen, entscheiden wir nach Richtung
+        if (sinusState === "HALTEN") {
+            if (amplitude > holdThreshold) sinusState = "EINATMEN";
+            else if (amplitude < -holdThreshold) sinusState = "AUSATMEN";
+            phaseStartTime = Date.now();
+        }
+    }
+
+    // 4. RICHTUNGSWECHSEL (Nur wenn nicht gehalten wird)
+    if (sinusState !== "HALTEN" && sinusState !== "STANDBY") {
         checkZeroCrossing(amplitude);
     }
 
-    // Nur splatten, wenn die Werte gültig sind
-    if (!isNaN(amplitude) && Math.abs(amplitude) > 0.01) {
-        let breathColor = morphColor(amplitude);
-        splat(0.5 + (acc.x / 30), 0.5 - (acc.y / 30), acc.x * 0.1, acc.y * 0.1, breathColor);
-    }
+    // 5. VISUALS: Der Honig wird bei "HALTEN" zäh und starr
+    let breathColor = morphColor(amplitude);
+    let force = (sinusState === "HALTEN") ? 0.1 : Math.abs(amplitude) * 2.0;
+    
+    splat(0.5 + (acc.x / 40), 0.5 - (acc.y / 40), acc.x * 0.1, acc.y * 0.1, breathColor);
 
-    lastZ = smoothZ;
+    statsDiv.innerText = `STATUS: ${sinusState} | AMP: ${amplitude.toFixed(3)}`;
 }
 // Hilfsfunktion: Sanfter Farbübergang (Kein harter Switch!)
 function morphColor(t) {

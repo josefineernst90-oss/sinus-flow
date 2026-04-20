@@ -23,13 +23,17 @@ SOFTWARE.
 */
 
 'use strict';
+
+let port;
+let reader;
+
 // --- 3D-SURFACE MAPPING VARIABLEN ---
 // Diese Werte brauchen einen Start-Wert, damit die Mathe nicht bei 0 hängen bleibt
 let averageZ = 9.81; 
 let driftAlpha = 0.02; // Standard-Drift (langsam)
 let smoothZ = 9.81;
 let lastZ = 9.81;
-let sensitivityGain = 60.0;
+let sensitivityGain = 80.0;
 let lastGravity = { x: 0, y: 0, z: 9.81 };
 
 // --- SINUS 0 PHASE: KERN-VARIABLEN ---
@@ -54,43 +58,33 @@ const statsDiv = document.getElementById('stats-display');
 const pulseCanvas = document.getElementById('pulse-canvas');
 const pCtx = pulseCanvas.getContext('2d');
 
-// --- GYRO-SYNC AKTIVIERUNG ---
+// Autopilot/Gyro Button
 const autoBtn = document.getElementById('autopilot-btn');
 if (autoBtn) {
-    autoBtn.addEventListener('click', async () => {
-        // Berechtigung einholen (Android Chrome braucht das oft explizit)
-        if (typeof DeviceMotionEvent.requestPermission === 'function') {
-            const permission = await DeviceMotionEvent.requestPermission();
-            if (permission !== 'granted') return;
-        }
+    autoBtn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        activateGyroSync();
+    });
+}
 
-        gyroActive = !gyroActive;
-        if (gyroActive) {
-            window.addEventListener('devicemotion', handleChestMotion);
-            autoBtn.innerText = "GYRO SYNC: AN";
-            autoBtn.classList.add('active');
-            phaseLabel.innerText = "AUF BRUST LEGEN";
-        } else {
-            window.removeEventListener('devicemotion', handleChestMotion);
-            autoBtn.innerText = "GYRO SYNC: AUS";
-            autoBtn.classList.remove('active');
-            sinusState = "STANDBY";
+// Clean Session Button
+const cleanBtn = document.getElementById('clean-session');
+if (cleanBtn) {
+    cleanBtn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        if (confirm("Session wirklich löschen?")) {
+            localStorage.removeItem('sinus_logs');
+            location.reload();
         }
     });
 }
-const cleanBtn = document.getElementById('clean-session');
-if (cleanBtn) {
-    cleanBtn.addEventListener('touchstart', (e) => {
-        e.stopPropagation(); // Verhindert, dass die Simulation reagiert
-    }, {passive: true});
-
-    cleanBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (confirm("Session wirklich löschen?")) {
-            sessionLogs = [];
-            localStorage.removeItem('sinus_logs');
-            location.reload(); // Einfachste Methode zum Reset auf dem Handy
-        }
+// XIAO Connect Button
+const connectBtn = document.getElementById('connect-serial');
+if (connectBtn) {
+    // Wir nutzen 'pointerdown', weil es schneller reagiert als 'click'
+    connectBtn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation(); // STOPPT den Klick, damit der Honig nicht reagiert
+        connectSerial(); // Deine Funktion für den XIAO
     });
 }
 // Simulation section
@@ -2087,5 +2081,44 @@ function checkZeroCrossing(amt) {
         logPhaseChange(sinusState === "EINATMEN" ? "AUSATMEN" : "EINATMEN");
     }
     lastSign = currentSign;
+}
+
+async function connectSerial() {
+    try {
+        // Fragt dich, welchen USB-Port (XIAO) du nutzen willst
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        
+        const decoder = new TextDecoderStream();
+        port.readable.pipeTo(decoder.writable);
+        reader = decoder.readable.getReader();
+
+        console.log("XIAO Verbunden!");
+        readLoop(); // Startet das Lauschen
+    } catch (err) {
+        console.error("Serial Fehler:", err);
+    }
+}
+
+async function readLoop() {
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        
+        // Der Wert vom XIAO wird hier verarbeitet
+        let amplitude = parseFloat(value);
+        if (!isNaN(amplitude)) {
+            processAtemWelle(amplitude);
+        }
+    }
+}
+
+function processAtemWelle(amp) {
+    // Hier steuerst du jetzt den Honig-Flow mit dem XIAO-Wert!
+    let force = Math.abs(amp) * 10;
+    splat(0.5, 0.5, 0, 0, morphColor(amp));
+    
+    // UI Update
+    statsDiv.innerText = "XIAO DRUCK: " + amp.toFixed(4);
 }
 ;

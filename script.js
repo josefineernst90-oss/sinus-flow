@@ -24,8 +24,12 @@ SOFTWARE.
 
 'use strict';
 // --- 3D-SURFACE MAPPING VARIABLEN ---
-let averageZ = 9.81; // Wir kalibrieren uns auf die Erdbeschleunigung
-let driftAlpha = 0.005; // Wie schnell sich der Nullpunkt an deine Lage anpasst
+// Diese Werte brauchen einen Start-Wert, damit die Mathe nicht bei 0 hängen bleibt
+let averageZ = 9.81; 
+let smoothZ = 9.81;
+let lastZ = 9.81;
+let sensitivityGain = 80.0;
+let lastGravity = { x: 0, y: 0, z: 9.81 };
 
 // --- SINUS 0 PHASE: KERN-VARIABLEN ---
 let sinusState = "STANDBY"; 
@@ -36,7 +40,6 @@ let lastToggleTime = Date.now();
 
 // Gyro-Sync Logik
 let gyroActive = false;
-let lastZ = 0; 
 let gyroThreshold = 0.12; // Deine Atemsensibilität (Anpassen falls nötig)
 
 // Neue UI-Elemente referenzieren
@@ -2009,61 +2012,47 @@ function saveLogsToStorage() {
 }
 // --- ATEM-ERKENNUNG (DIE BRÜCKE) ---
 function handleChestMotion(event) {
-    if (!gyroActive) return;
+   if (!gyroActive) return;
     
     let acc = event.accelerationIncludingGravity;
-    if (!acc || acc.z === null) return;
+    // Sicherheits-Check: Falls der Sensor noch keine Daten liefert, brich ab
+    if (!acc || acc.z === null || isNaN(acc.z)) return;
 
-    // 1. DYNAMISCHE NULLPUNKT-KALIBRIERUNG (Das "Ufer")
-    // Wir lernen ständig, wo "Mitte" ist, falls du dich umsetzt
-    averageZ = (driftAlpha * acc.z) + ((1 - driftAlpha) * averageZ);
+    // Sanfte Filterung
+    let alpha = 0.08;
+    smoothZ = (alpha * acc.z) + ((1 - alpha) * smoothZ);
+    averageZ = (0.005 * acc.z) + ((1 - 0.005) * averageZ);
 
-    // 2. DIE ATEM-AMPLITUDE (Abweichung von der Oberfläche)
-    // Positive Werte = Brust hebt sich, Negative = Brust senkt sich
-    let amplitude = acc.z - averageZ;
+    let amplitude = (smoothZ - averageZ) * sensitivityGain;
 
-    // 3. NEIGUNG (X/Y) FÜR DIE FLIESS-RICHTUNG
-    // Wir mappen die Neigung des Handys direkt auf die Strömung
-    let tiltX = acc.x * 0.1;
-    let tiltY = acc.y * 0.1;
+    // Hier passiert die Magie
+    if (sinusState === "STANDBY") {
+        if (Math.abs(amplitude) > 0.5) { // Braucht einen kleinen "Weckruf"
+            sinusState = nextPhaseIsEinatmen ? "EINATMEN" : "AUSATMEN";
+            phaseStartTime = Date.now();
+        }
+    } else {
+        checkZeroCrossing(amplitude);
+    }
 
-    // 4. DEN "HONIG" DIREKT ANSTEUERN
-    // Wir erzeugen einen permanenten Splat in der Mitte, 
-    // dessen Farbe und Kraft sich mit dem Atemzug MORPHED.
-    
-    // Farbmischung: Je nach Amplitude zwischen Bernstein und Blau gleiten
-    let t = Math.max(-1, Math.min(1, amplitude * 2)); // Normalisiert auf -1 bis 1
-    let breathColor = morphColor(t); 
+    // Nur splatten, wenn die Werte gültig sind
+    if (!isNaN(amplitude) && Math.abs(amplitude) > 0.01) {
+        let breathColor = morphColor(amplitude);
+        splat(0.5 + (acc.x / 30), 0.5 - (acc.y / 30), acc.x * 0.1, acc.y * 0.1, breathColor);
+    }
 
-    // Kraft des "Quellens": Wie stark drückt der Atem in die Flüssigkeit?
-    let force = Math.abs(amplitude) * config.SPLAT_FORCE * 0.2;
-    
-    // Wir "injizieren" die Kraft direkt an der Position, wohin das Handy neigt
-    let posX = 0.5 + (acc.x / 20);
-    let posY = 0.5 - (acc.y / 20);
-
-    splat(posX, posY, tiltX * force, tiltY * force, breathColor);
-
-    // 5. STATUS-CHECK FÜR DAS MUSICAL
-    // Wir nutzen den Nulldurchgang nur noch für den Ton-Ping
-    checkZeroCrossing(amplitude);
-
-    statsDiv.innerText = `AMPLITUDE: ${amplitude.toFixed(3)} | SURFACE: ${averageZ.toFixed(2)}`;
+    lastZ = smoothZ;
 }
 // Hilfsfunktion: Sanfter Farbübergang (Kein harter Switch!)
 function morphColor(t) {
-    // t geht von -1 (Ausatmen) bis +1 (Einatmen)
-    // Wir mischen Bernstein (1.0, 0.5, 0.0) und Blau (0.0, 0.4, 1.0)
+  // amp > 0 = Einatmen (Bernstein), amp < 0 = Ausatmen (Blau)
     let r, g, b;
-    if (t > 0) { // Einatmen-Tendenz (Bernstein)
-        r = 0.15 * t;
-        g = 0.08 * t;
-        b = 0.01;
-    } else { // Ausatmen-Tendenz (Blau)
-        let s = Math.abs(t);
-        r = 0.01;
-        g = 0.05 * s;
-        b = 0.15 * s;
+    let intensity = Math.min(Math.abs(amp) * 0.5, 0.2); // Deckelt die Helligkeit
+    
+    if (amp > 0) {
+        r = 1.0 * intensity; g = 0.5 * intensity; b = 0.1 * intensity;
+    } else {
+        r = 0.1 * intensity; g = 0.3 * intensity; b = 1.0 * intensity;
     }
     return { r, g, b };
 }

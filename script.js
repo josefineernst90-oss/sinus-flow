@@ -1935,18 +1935,27 @@ function endTouch() {
 }
 
 function togglePhase() {
-   let now = Date.now();
-    if (now - lastToggleTime < 1200) return; // Spam-Schutz
+    let now = Date.now();
+    if (now - lastToggleTime < 1500) return; // SINUS 0 Schutz
 
     let oldPhase = sinusState;
     sinusState = (sinusState === "EINATMEN") ? "AUSATMEN" : "EINATMEN";
     nextPhaseIsEinatmen = (sinusState === "EINATMEN");
 
-    // Feedback: Ton & Vibration
+    // Akustik
     playPing(sinusState === "EINATMEN" ? 660 : 440);
+    
+    // HAPTIK-FIX: Expliziter Aufruf
     if (navigator.vibrate) {
-        sinusState === "EINATMEN" ? navigator.vibrate(60) : navigator.vibrate([20, 40]);
+        if (sinusState === "EINATMEN") {
+            navigator.vibrate(80); // Ein kräftiger "Einatmen"-Stupser
+        } else {
+            navigator.vibrate([30, 50]); // Ein doppelter "Ausatmen"-Stupser
+        }
     }
+
+    // Farbe im Honig anpassen
+    if (pointers[0]) pointers[0].color = generateColor();
 
     lastToggleTime = now;
     logPhaseChange(oldPhase);
@@ -1998,36 +2007,49 @@ function saveLogsToStorage() {
 function handleChestMotion(event) {
     if (!gyroActive) return;
     
-    let z = event.accelerationIncludingGravity.z;
-    if (z === null) return;
+    let acc = event.accelerationIncludingGravity;
+    if (!acc || acc.z === null) return;
 
-    let alpha = 0.1; 
-    let filteredZ = alpha * z + (1 - alpha) * lastZ;
-    let delta = filteredZ - lastZ;
+    // Glättung für alle 3 Achsen (Low Pass Filter)
+    let alpha = 0.15;
+    lastGravity.x = alpha * acc.x + (1 - alpha) * lastGravity.x;
+    lastGravity.y = alpha * acc.y + (1 - alpha) * lastGravity.y;
+    lastGravity.z = alpha * acc.z + (1 - alpha) * lastGravity.z;
 
-    // DAS IST NEU: Sichtbarer Beweis für die Sensor-Aktivität
-    // Wir schreiben den Delta-Wert direkt in das Stats-Feld
-    statsDiv.innerText = "SENSOR-DRUCK: " + delta.toFixed(4);
+    // 1. MASSEN-BEWEGUNG: Wir berechnen die Position basierend auf der Neigung
+    // Wir mappen die X/Y Neigung auf das Display-Koordinatensystem (0.0 bis 1.0)
+    let tiltX = (lastGravity.x / 9.81) + 0.5; 
+    let tiltY = (lastGravity.y / 9.81) + 0.5;
+    
+    // 2. ATEM-DELTA (Z-Achse)
+    let delta = lastGravity.z - lastZ;
 
+    // AUTO-START LOGIK: Wenn wir im Standby lauschen und Bewegung spüren
     if (sinusState === "STANDBY") {
         if (Math.abs(delta) > gyroThreshold) {
             sinusState = nextPhaseIsEinatmen ? "EINATMEN" : "AUSATMEN";
             phaseStartTime = Date.now();
             playPing(sinusState === "EINATMEN" ? 660 : 440);
+            if (navigator.vibrate) navigator.vibrate(100); // Erster Kontakt-Vibe
         }
-    } 
-    else if (sinusState === "EINATMEN" && delta < -gyroThreshold) {
-        togglePhase();
-    } 
-    else if (sinusState === "AUSATMEN" && delta > gyroThreshold) {
-        togglePhase();
+        statsDiv.innerText = "LAUSCHE AUF ATEM... (Z-Delta: " + delta.toFixed(3) + ")";
+    } else {
+        // NORMALE U-TURN LOGIK
+        if (sinusState === "EINATMEN" && delta < -gyroThreshold) {
+            togglePhase();
+        } else if (sinusState === "AUSATMEN" && delta > gyroThreshold) {
+            togglePhase();
+        }
+        statsDiv.innerText = "PHASE: " + sinusState + " | DRUCK: " + delta.toFixed(3);
     }
-    
-    // Visuelles Feedback: Honig-Kleckse in der Mitte bei Bewegung
-    if (Math.abs(delta) > 0.05) {
-        // Wir erzeugen Farbe im Zentrum (0.5, 0.5)
-        splat(0.5, 0.5, 0, 0, generateColor());
+
+    // 3. DER HONIG-EFFEKT: Wir "malen" dort, wo das Handy hinneigt
+    // Je stärker die Bewegung (delta), desto heftiger der Klecks
+    if (Math.abs(delta) > 0.02) {
+        let force = delta * config.SPLAT_FORCE * 0.5;
+        splat(tiltX, 1.0 - tiltY, force, force, generateColor());
     }
-    lastZ = filteredZ;
+
+    lastZ = lastGravity.z;
 }
 ;

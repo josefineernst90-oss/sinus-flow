@@ -26,10 +26,10 @@ SOFTWARE.
 // --- 3D-SURFACE MAPPING VARIABLEN ---
 // Diese Werte brauchen einen Start-Wert, damit die Mathe nicht bei 0 hängen bleibt
 let averageZ = 9.81; 
-let alpha = 0.02; // Standard-Drift (langsam)
+let driftAlpha = 0.02; // Standard-Drift (langsam)
 let smoothZ = 9.81;
 let lastZ = 9.81;
-let sensitivityGain = 25.0;
+let sensitivityGain = 60.0;
 let lastGravity = { x: 0, y: 0, z: 9.81 };
 
 // --- SINUS 0 PHASE: KERN-VARIABLEN ---
@@ -2020,49 +2020,47 @@ function handleChestMotion(event) {
     let acc = event.accelerationIncludingGravity;
     if (!acc || acc.z === null) return;
 
-    // 1. EXTREME GLÄTTUNG
-    // Wir nehmen nur 2% des neuen Werts und 98% des alten. Das killt das Zittern.
-    smoothZ = (alpha * acc.z) + ((1 - alpha) * smoothZ);
-    averageZ = (0.002 * acc.z) + ((1 - 0.002) * averageZ);
+    // 1. DYNAMISCHE NULLPUNKT-KALIBRIERUNG (wie gehabt)
+    let currentAlpha = (sinusState === "STANDBY") ? 0.2 : 0.005;
+    averageZ = (currentAlpha * acc.z) + ((1 - currentAlpha) * averageZ);
 
-    let amplitude = (smoothZ - averageZ) * sensitivityGain;
+    // 2. DIE AMPLITUDE
+    let amplitude = (acc.z - averageZ) * sensitivityGain;
 
-    // 2. SCHMITT-TRIGGER LOGIK (Der Ruhe-Anker)
-    // Wir wechseln NUR, wenn die Welle die Deadzone wirklich verlässt
-    if (amplitude > deadzone) {
-        if (sinusState !== "EINATMEN") {
-            sinusState = "EINATMEN";
-            triggerPhaseChange("EINATMEN", 660);
-        }
-    } else if (amplitude < -deadzone) {
-        if (sinusState !== "AUSATMEN") {
-            sinusState = "AUSATMEN";
-            triggerPhaseChange("AUSATMEN", 440);
+    // 3. LUFTANHALTEN-ERKENNUNG (Die "Null-Zone")
+    if (Math.abs(amplitude) < holdThreshold && sinusState !== "STANDBY") {
+        holdStartCounter++;
+        
+        // Wenn du für ca. 0.5 Sekunden (bei 60fps ca. 30 Frames) still hältst
+        if (holdStartCounter > 30 && sinusState !== "HALTEN") {
+            let previousState = sinusState;
+            sinusState = "HALTEN";
+            logPhaseChange(previousState); // Loggt die beendete Atemphase
+            if (navigator.vibrate) navigator.vibrate([10, 10]); // Ganz sanftes Ticken
         }
     } else {
-        // Wir sind in der Deadzone -> Atem anhalten / Stille
-        if (sinusState !== "HALTEN" && Math.abs(amplitude) < (deadzone * 0.5)) {
-            sinusState = "HALTEN";
-            // Keine Vibration, kein Sound, einfach nur Stille
+        holdStartCounter = 0; // Bei Bewegung wird der Counter sofort zurückgesetzt
+        
+        // Wenn wir aus dem "HALTEN" kommen, entscheiden wir nach Richtung
+        if (sinusState === "HALTEN") {
+            if (amplitude > holdThreshold) sinusState = "EINATMEN";
+            else if (amplitude < -holdThreshold) sinusState = "AUSATMEN";
+            phaseStartTime = Date.now();
         }
     }
 
-    // 3. HONIG-FLUSS (Nur bei echter Bewegung)
-    if (Math.abs(amplitude) > 0.05) {
-        let breathColor = morphColor(amplitude);
-        // Der Honig kleckst jetzt nur noch, wenn wirklich geatmet wird
-        splat(0.5 + (acc.x / 40), 0.5 - (acc.y / 40), acc.x * 0.1, acc.y * 0.1, breathColor);
+    // 4. RICHTUNGSWECHSEL (Nur wenn nicht gehalten wird)
+    if (sinusState !== "HALTEN" && sinusState !== "STANDBY") {
+        checkZeroCrossing(amplitude);
     }
 
-    statsDiv.innerText = `AMPLITUDE: ${amplitude.toFixed(3)} | STATUS: ${sinusState}`;
-}
-function triggerPhaseChange(newState, freq) {
-    phaseStartTime = Date.now();
-    playPing(freq);
-    if (navigator.vibrate) {
-        newState === "EINATMEN" ? navigator.vibrate(40) : navigator.vibrate([20, 20]);
-    }
-    logPhaseChange(newState === "EINATMEN" ? "AUSATMEN" : "EINATMEN");
+    // 5. VISUALS: Der Honig wird bei "HALTEN" zäh und starr
+    let breathColor = morphColor(amplitude);
+    let force = (sinusState === "HALTEN") ? 0.1 : Math.abs(amplitude) * 2.0;
+    
+    splat(0.5 + (acc.x / 40), 0.5 - (acc.y / 40), acc.x * 0.1, acc.y * 0.1, breathColor);
+
+    statsDiv.innerText = `STATUS: ${sinusState} | AMP: ${amplitude.toFixed(3)}`;
 }
 // Hilfsfunktion: Sanfter Farbübergang (Kein harter Switch!)
 function morphColor(t) {

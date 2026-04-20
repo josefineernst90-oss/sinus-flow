@@ -23,6 +23,17 @@ SOFTWARE.
 */
 
 'use strict';
+// --- SINUS 0 PHASE: KERN-VARIABLEN ---
+let sinusState = "STANDBY"; 
+let nextPhaseIsEinatmen = true;
+let lastInteractionTime = Date.now();
+let phaseStartTime = Date.now();
+let lastToggleTime = Date.now();
+
+// Gyro-Sync Logik
+let gyroActive = false;
+let lastZ = 0; 
+let gyroThreshold = 0.12; // Deine Atemsensibilität (Anpassen falls nötig)
 
 // Neue UI-Elemente referenzieren
 const progressBar = document.getElementById('progress-bar');
@@ -33,6 +44,30 @@ const statsDiv = document.getElementById('stats-display');
 const pulseCanvas = document.getElementById('pulse-canvas');
 const pCtx = pulseCanvas.getContext('2d');
 
+// --- GYRO-SYNC AKTIVIERUNG ---
+const autoBtn = document.getElementById('autopilot-btn');
+if (autoBtn) {
+    autoBtn.addEventListener('click', async () => {
+        // Berechtigung einholen (Android Chrome braucht das oft explizit)
+        if (typeof DeviceMotionEvent.requestPermission === 'function') {
+            const permission = await DeviceMotionEvent.requestPermission();
+            if (permission !== 'granted') return;
+        }
+
+        gyroActive = !gyroActive;
+        if (gyroActive) {
+            window.addEventListener('devicemotion', handleChestMotion);
+            autoBtn.innerText = "GYRO SYNC: AN";
+            autoBtn.classList.add('active');
+            phaseLabel.innerText = "AUF BRUST LEGEN";
+        } else {
+            window.removeEventListener('devicemotion', handleChestMotion);
+            autoBtn.innerText = "GYRO SYNC: AUS";
+            autoBtn.classList.remove('active');
+            sinusState = "STANDBY";
+        }
+    });
+}
 const cleanBtn = document.getElementById('clean-session');
 if (cleanBtn) {
     cleanBtn.addEventListener('touchstart', (e) => {
@@ -53,8 +88,6 @@ if (cleanBtn) {
 const canvas = document.getElementsByTagName('canvas')[0];
 resizeCanvas();
 
-let sinusState = "STANDBY"; 
-let nextPhaseIsEinatmen = true;
 // --- DATEN-LOGGING ---
 // Lädt gespeicherte Daten oder startet mit einer leeren Liste
 let sessionLogs;
@@ -64,7 +97,7 @@ try {
     console.error("LocalStorage ist blockiert:", e);
     sessionLogs = []; // Fallback auf leere Liste
 }
-let phaseStartTime = Date.now();
+
 let sessionStartTime = Date.now();
 
 let config = {
@@ -95,7 +128,7 @@ let config = {
     // --- POST-PROCESSING (DAS KAMERA-GLÜHEN) ---
     BLOOM: true,                 // Schaltet den generellen Glüh-Effekt (Bloom) ein.
     BLOOM_ITERATIONS: 8,         // Wie weich das Glühen in den schwarzen Hintergrund ausläuft (höher = weicherer Rand).
-    BLOOM_RESOLUTION: 256,       // Auflösung des Glüh-Effekts. 256 reicht völlig aus und spart Rechenleistung.
+    BLOOM_RESOLUTION: 128,       // Auflösung des Glüh-Effekts. 256 reicht völlig aus und spart Rechenleistung.
     BLOOM_INTENSITY: 0.2,        // VORHER 0.8 -> Drosselt das gleißende Leuchten massiv. Es bleibt ein weicher, lokaler Rand.
     BLOOM_THRESHOLD: 0.8,        // VORHER 0.6 -> Das Glühen fängt erst bei viel helleren Farben an (verhindert, dass alles sofort weiß brennt).
     BLOOM_SOFT_KNEE: 0.7,        // Macht den Übergang zwischen "glüht" und "glüht nicht" organisch und fließend.
@@ -132,20 +165,6 @@ if (!ext.supportLinearFiltering) {
     config.BLOOM = false;
     config.SUNRAYS = false;
 }
-function runAutopilot() {
-    if (!autopilotActive || sinusState === "STANDBY") return;
-    
-    let currentDuration = (Date.now() - phaseStartTime) / 1000;
-    let relevantLogs = sessionLogs.filter(e => e.phase === sinusState);
-    let avg = relevantLogs.length > 0 
-        ? relevantLogs.reduce((acc, e) => acc + e.duration, 0) / relevantLogs.length 
-        : 5.0;
-
-    // Das Handy führt den Wechsel aus, wenn der Durchschnitt erreicht ist
-    if (currentDuration >= avg) {
-        togglePhase();
-    }
-}						 
 
 function updateLiveUI() {
     if (sinusState === "STANDBY") {
@@ -194,20 +213,14 @@ function updateLiveUI() {
 }
 
 function logPhaseChange(previousPhase, sinusState) {
-    let now = Date.now();
-    let duration = (now - phaseStartTime) / 1000;
-    
-    if (duration > 0.5) { 
+  let duration = (Date.now() - phaseStartTime) / 1000;
+    if (duration > 0.8) {
         sessionLogs.push({ phase: previousPhase, duration: duration });
-        saveLogsToStorage(); // <-- Hier speichern wir die Daten permanent
+        localStorage.setItem('sinus_logs', JSON.stringify(sessionLogs));
     }
-
-    // Update das Text-Display
-    let summary = getSessionSummary();
-    statsDiv.innerHTML = summary.replace(/\n/g, '<br>');
-    
+    statsDiv.innerHTML = getSessionSummary().replace(/\n/g, '<br>');
     drawPulse();
-    phaseStartTime = now;
+    phaseStartTime = Date.now();
 }
 let touchTimer;
 const NOTAUS_DURATION = 2000; // 2 Sekunden halten
@@ -1265,7 +1278,7 @@ let driftTimer = 0;
 // Die Startpositionen unserer beiden Pole
 let poleA = { x: 0.5, y: 0.3, targetX: 0.5, targetY: 0.3, color: { r: 1.0, g: 0.5, b: 0.05 } };
 let poleB = { x: 0.5, y: 0.7, targetX: 0.5, targetY: 0.7, color: { r: 0.05, g: 0.3, b: 1.0 } };
-let lastInteractionTime = Date.now();
+
 
 update();
 
@@ -1922,32 +1935,21 @@ function endTouch() {
 }
 
 function togglePhase() {
-   let oldPhase = sinusState;
-    if (sinusState === "EINATMEN") {
-        sinusState = "AUSATMEN";
-        nextPhaseIsEinatmen = true; // Nach Ausatmen kommt wieder Einatmen
-        console.log(">> 3: AUSATMEN (U-Turn -> Blau)");
-    } else {
-        sinusState = "EINATMEN";
-        nextPhaseIsEinatmen = false; // Nach Einatmen kommt wieder Ausatmen
-        console.log(">> 1: EINATMEN (U-Turn -> Bernstein)");
-    }
-    
-  // HIER KOMMT DIE MAGIE
+   let now = Date.now();
+    if (now - lastToggleTime < 1200) return; // Spam-Schutz
+
+    let oldPhase = sinusState;
+    sinusState = (sinusState === "EINATMEN") ? "AUSATMEN" : "EINATMEN";
+    nextPhaseIsEinatmen = (sinusState === "EINATMEN");
+
+    // Feedback: Ton & Vibration
+    playPing(sinusState === "EINATMEN" ? 660 : 440);
     if (navigator.vibrate) {
-        if (sinusState === "EINATMEN") {
-            navigator.vibrate(80); // Bernstein: Kräftiger Stoß
-        } else {
-            navigator.vibrate([20, 30, 20, 30, 80]); // Blau: Surren
-        }
+        sinusState === "EINATMEN" ? navigator.vibrate(60) : navigator.vibrate([20, 40]);
     }
-    // SOFORTIGES Update der Farbe, nicht auf den Timer warten!
-    if (pointers[0]) {
-        pointers[0].color = generateColor();
-    }
-   
-   
-    logPhaseChange(oldPhase, sinusState);
+
+    lastToggleTime = now;
+    logPhaseChange(oldPhase);
 }
 
 function startPhase() {
@@ -1973,25 +1975,12 @@ function endPhase() {
 
 // Erweiterte Analyse-Variablen
 function getSessionSummary() {
-    if (sessionLogs.length === 0) return "Noch keine Daten gesammelt.";
-
-    let totalDuration = sessionLogs.reduce((acc, entry) => acc + parseFloat(entry.duration), 0);
-    let avgDuration = (totalDuration / sessionLogs.length).toFixed(2);
-    
-    let einatmen = sessionLogs.filter(e => e.phase === "EINATMEN");
-    let ausatmen = sessionLogs.filter(e => e.phase === "AUSATMEN");
-    
-    let avgEin = (einatmen.reduce((acc, e) => acc + parseFloat(e.duration), 0) / (einatmen.length || 1)).toFixed(2);
-    let avgAus = (ausatmen.reduce((acc, e) => acc + parseFloat(e.duration), 0) / (ausatmen.length || 1)).toFixed(2);
-
-    return `
-        --- SESSION SUMMARY ---
-        Zyklen: ${sessionLogs.length}
-        Ø Phase: ${avgDuration}s
-        Ø Einatmen: ${avgEin}s
-        Ø Ausatmen: ${avgAus}s
-        Kohärenz: ${Math.abs(avgEin - avgAus) < 0.5 ? "HOCH" : "VARIABEL"}
-    `;
+    if (sessionLogs.length === 0) return "BEREIT...";
+    let ein = sessionLogs.filter(e => e.phase === "EINATMEN");
+    let aus = sessionLogs.filter(e => e.phase === "AUSATMEN");
+    let avgEin = (ein.reduce((acc, e) => acc + e.duration, 0) / (ein.length || 1)).toFixed(2);
+    let avgAus = (aus.reduce((acc, e) => acc + e.duration, 0) / (aus.length || 1)).toFixed(2);
+    return `Zyklen: ${sessionLogs.length} | Ø EIN: ${avgEin}s | Ø AUS: ${avgAus}s`;
 }
 // Funktion zum "Dumping" der Daten in die Zwischenablage oder Konsole
 function exportSessionData() {
@@ -2004,5 +1993,31 @@ function exportSessionData() {
 }
 function saveLogsToStorage() {
     localStorage.setItem('sinus_logs', JSON.stringify(sessionLogs));
+}
+// --- ATEM-ERKENNUNG (DIE BRÜCKE) ---
+function handleChestMotion(event) {
+    if (!gyroActive) return;
+    
+    // Z-Achse ist die Tiefe (Brustkorb heben/senken)
+    let z = event.accelerationIncludingGravity.z;
+    if (z === null) return;
+
+    // Glättungs-Filter (Low Pass)
+    let alpha = 0.1;
+    let filteredZ = alpha * z + (1 - alpha) * lastZ;
+    let delta = filteredZ - lastZ;
+
+    // U-Turn Logik: Wenn die Bewegungsrichtung kippt
+    if (sinusState === "EINATMEN" && delta < -gyroThreshold) {
+        togglePhase();
+    } else if (sinusState === "AUSATMEN" && delta > gyroThreshold) {
+        togglePhase();
+    }
+    
+    // Kleiner visueller Impuls in der Mitte passend zur Bewegung
+    if (Math.abs(delta) > 0.05) {
+        splat(0.5, 0.5, 0, 0, generateColor());
+    }
+    lastZ = filteredZ;
 }
 ;

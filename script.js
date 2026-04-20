@@ -2001,11 +2001,14 @@ function handleChestMotion(event) {
     let z = event.accelerationIncludingGravity.z;
     if (z === null) return;
 
-    let alpha = 0.1;
+    let alpha = 0.1; 
     let filteredZ = alpha * z + (1 - alpha) * lastZ;
     let delta = filteredZ - lastZ;
 
-    // KICKSTART: Wenn wir im Standby sind und Bewegung spüren, fangen wir an
+    // DAS IST NEU: Sichtbarer Beweis für die Sensor-Aktivität
+    // Wir schreiben den Delta-Wert direkt in das Stats-Feld
+    statsDiv.innerText = "SENSOR-DRUCK: " + delta.toFixed(4);
+
     if (sinusState === "STANDBY") {
         if (Math.abs(delta) > gyroThreshold) {
             sinusState = nextPhaseIsEinatmen ? "EINATMEN" : "AUSATMEN";
@@ -2013,7 +2016,6 @@ function handleChestMotion(event) {
             playPing(sinusState === "EINATMEN" ? 660 : 440);
         }
     } 
-    // NORMALE LOGIK: U-Turn Erkennung
     else if (sinusState === "EINATMEN" && delta < -gyroThreshold) {
         togglePhase();
     } 
@@ -2021,8 +2023,9 @@ function handleChestMotion(event) {
         togglePhase();
     }
     
-    // Optisches Feedback: Der Honig reagiert auf die Stärke deines Atems
+    // Visuelles Feedback: Honig-Kleckse in der Mitte bei Bewegung
     if (Math.abs(delta) > 0.05) {
+        // Wir erzeugen Farbe im Zentrum (0.5, 0.5)
         splat(0.5, 0.5, 0, 0, generateColor());
     }
     lastZ = filteredZ;

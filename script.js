@@ -23,6 +23,10 @@ SOFTWARE.
 */
 
 'use strict';
+// --- 3D-SURFACE MAPPING VARIABLEN ---
+let averageZ = 9.81; // Wir kalibrieren uns auf die Erdbeschleunigung
+let driftAlpha = 0.005; // Wie schnell sich der Nullpunkt an deine Lage anpasst
+
 // --- SINUS 0 PHASE: KERN-VARIABLEN ---
 let sinusState = "STANDBY"; 
 let nextPhaseIsEinatmen = true;
@@ -2010,46 +2014,70 @@ function handleChestMotion(event) {
     let acc = event.accelerationIncludingGravity;
     if (!acc || acc.z === null) return;
 
-    // Glättung für alle 3 Achsen (Low Pass Filter)
-    let alpha = 0.15;
-    lastGravity.x = alpha * acc.x + (1 - alpha) * lastGravity.x;
-    lastGravity.y = alpha * acc.y + (1 - alpha) * lastGravity.y;
-    lastGravity.z = alpha * acc.z + (1 - alpha) * lastGravity.z;
+    // 1. DYNAMISCHE NULLPUNKT-KALIBRIERUNG (Das "Ufer")
+    // Wir lernen ständig, wo "Mitte" ist, falls du dich umsetzt
+    averageZ = (driftAlpha * acc.z) + ((1 - driftAlpha) * averageZ);
 
-    // 1. MASSEN-BEWEGUNG: Wir berechnen die Position basierend auf der Neigung
-    // Wir mappen die X/Y Neigung auf das Display-Koordinatensystem (0.0 bis 1.0)
-    let tiltX = (lastGravity.x / 9.81) + 0.5; 
-    let tiltY = (lastGravity.y / 9.81) + 0.5;
+    // 2. DIE ATEM-AMPLITUDE (Abweichung von der Oberfläche)
+    // Positive Werte = Brust hebt sich, Negative = Brust senkt sich
+    let amplitude = acc.z - averageZ;
+
+    // 3. NEIGUNG (X/Y) FÜR DIE FLIESS-RICHTUNG
+    // Wir mappen die Neigung des Handys direkt auf die Strömung
+    let tiltX = acc.x * 0.1;
+    let tiltY = acc.y * 0.1;
+
+    // 4. DEN "HONIG" DIREKT ANSTEUERN
+    // Wir erzeugen einen permanenten Splat in der Mitte, 
+    // dessen Farbe und Kraft sich mit dem Atemzug MORPHED.
     
-    // 2. ATEM-DELTA (Z-Achse)
-    let delta = lastGravity.z - lastZ;
+    // Farbmischung: Je nach Amplitude zwischen Bernstein und Blau gleiten
+    let t = Math.max(-1, Math.min(1, amplitude * 2)); // Normalisiert auf -1 bis 1
+    let breathColor = morphColor(t); 
 
-    // AUTO-START LOGIK: Wenn wir im Standby lauschen und Bewegung spüren
-    if (sinusState === "STANDBY") {
-        if (Math.abs(delta) > gyroThreshold) {
-            sinusState = nextPhaseIsEinatmen ? "EINATMEN" : "AUSATMEN";
-            phaseStartTime = Date.now();
-            playPing(sinusState === "EINATMEN" ? 660 : 440);
-            if (navigator.vibrate) navigator.vibrate(100); // Erster Kontakt-Vibe
-        }
-        statsDiv.innerText = "LAUSCHE AUF ATEM... (Z-Delta: " + delta.toFixed(3) + ")";
-    } else {
-        // NORMALE U-TURN LOGIK
-        if (sinusState === "EINATMEN" && delta < -gyroThreshold) {
-            togglePhase();
-        } else if (sinusState === "AUSATMEN" && delta > gyroThreshold) {
-            togglePhase();
-        }
-        statsDiv.innerText = "PHASE: " + sinusState + " | DRUCK: " + delta.toFixed(3);
+    // Kraft des "Quellens": Wie stark drückt der Atem in die Flüssigkeit?
+    let force = Math.abs(amplitude) * config.SPLAT_FORCE * 0.2;
+    
+    // Wir "injizieren" die Kraft direkt an der Position, wohin das Handy neigt
+    let posX = 0.5 + (acc.x / 20);
+    let posY = 0.5 - (acc.y / 20);
+
+    splat(posX, posY, tiltX * force, tiltY * force, breathColor);
+
+    // 5. STATUS-CHECK FÜR DAS MUSICAL
+    // Wir nutzen den Nulldurchgang nur noch für den Ton-Ping
+    checkZeroCrossing(amplitude);
+
+    statsDiv.innerText = `AMPLITUDE: ${amplitude.toFixed(3)} | SURFACE: ${averageZ.toFixed(2)}`;
+}
+// Hilfsfunktion: Sanfter Farbübergang (Kein harter Switch!)
+function morphColor(t) {
+    // t geht von -1 (Ausatmen) bis +1 (Einatmen)
+    // Wir mischen Bernstein (1.0, 0.5, 0.0) und Blau (0.0, 0.4, 1.0)
+    let r, g, b;
+    if (t > 0) { // Einatmen-Tendenz (Bernstein)
+        r = 0.15 * t;
+        g = 0.08 * t;
+        b = 0.01;
+    } else { // Ausatmen-Tendenz (Blau)
+        let s = Math.abs(t);
+        r = 0.01;
+        g = 0.05 * s;
+        b = 0.15 * s;
     }
+    return { r, g, b };
+}
 
-    // 3. DER HONIG-EFFEKT: Wir "malen" dort, wo das Handy hinneigt
-    // Je stärker die Bewegung (delta), desto heftiger der Klecks
-    if (Math.abs(delta) > 0.02) {
-        let force = delta * config.SPLAT_FORCE * 0.5;
-        splat(tiltX, 1.0 - tiltY, force, force, generateColor());
+let lastSign = 0;
+function checkZeroCrossing(amt) {
+    let currentSign = Math.sign(amt);
+    if (lastSign !== 0 && currentSign !== lastSign) {
+        // Der Moment, in dem die Einatmung zur Ausatmung wird (oder umgekehrt)
+        sinusState = (currentSign > 0) ? "EINATMEN" : "AUSATMEN";
+        playPing(currentSign > 0 ? 660 : 440);
+        if (navigator.vibrate) navigator.vibrate(20);
+        logPhaseChange(sinusState === "EINATMEN" ? "AUSATMEN" : "EINATMEN");
     }
-
-    lastZ = lastGravity.z;
+    lastSign = currentSign;
 }
 ;

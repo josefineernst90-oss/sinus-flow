@@ -1,78 +1,266 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Airmanagement Simulation</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Limbic Looper - Biofeedback</title>
     <style>
-        * { user-select: none; box-sizing: border-box; }
-        html, body { overflow: hidden; background-color: #000; margin: 0; width: 100%; height: 100%; position: fixed; }
-        canvas { width: 100%; height: 100%; display: block; }
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+            touch-action: none;
+        }
 
-        /* Status-Anzeige oben links */
-        #stats-display { position: fixed; top: 20px; left: 20px; color: rgba(255,255,255,0.3); font-family: monospace; font-size: 11px; z-index: 100; pointer-events: none; }
-        
-        /* Button-Container oben rechts */
-       /* Der Container selbst lässt Klicks durch zum Honig... */
-#controls-right { 
-    position: fixed; 
-    top: 20px; 
-    right: 20px; 
-    z-index: 10000; /* Höher als alles andere */
-    display: flex; 
-    flex-direction: column; 
-    gap: 10px; 
-    pointer-events: none; 
-}
+        #status {
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
 
-/* ...aber die Buttons fangen den Klick aktiv ab! */
-button { 
-    background: rgba(40, 40, 40, 0.9) !important; 
-    border: 1px solid rgba(255, 255, 255, 0.3); 
-    color: #fff; 
-    font-family: monospace; 
-    font-size: 11px; 
-    padding: 12px 18px; 
-    cursor: pointer; 
-    border-radius: 4px; 
-    pointer-events: auto !important; /* KRITISCH: Button wird klickbar */
-    touch-action: manipulation;
-}
-        
-        button.active { color: #00ff7f; border-color: #00ff7f; background: rgba(0, 255, 127, 0.2); }
+        #touchpad {
+            width: 280px;
+            height: 280px;
+            border: 2px solid #1e293b;
+            border-radius: 50%;
+            position: relative;
+            background: radial-gradient(circle, #1e293b 0%, #0f172a 70%);
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
 
-        /* UI-Balken unten links */
-        #ui-container { position: fixed; bottom: 80px; left: 20px; width: 250px; z-index: 101; font-family: monospace; pointer-events: none; }
-        #progress-bar { width: 0%; height: 100%; transition: background 0.3s; }
-        #phase-label { font-size: 16px; margin-bottom: 5px; font-weight: bold; }
+        #dot {
+            width: 44px;
+            height: 44px;
+            background: #22d3ee;
+            border-radius: 50%;
+            position: absolute;
+            left: 118px; /* Zentriert: (280/2) - (44/2) */
+            top: 118px;
+            box-shadow: 0 0 20px #22d3ee, 0 0 40px rgba(34, 211, 238, 0.4);
+            cursor: grab;
+            transition: transform 0.1s ease-out;
+        }
 
-        /* Puls-Welle ganz unten */
-        #pulse-canvas { position: fixed; bottom: 0; left: 0; width: 100%; height: 60px; pointer-events: none; z-index: 99; opacity: 0.5; }
+        #dot:active {
+            cursor: grabbing;
+            transform: scale(0.9);
+        }
+
+        .controls {
+            margin-top: 40px;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            width: 280px;
+        }
+
+        button {
+            padding: 12px 20px;
+            border-radius: 12px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.9rem;
+        }
+
+        #connectBtn {
+            grid-column: span 2;
+            background-color: #334155;
+            color: white;
+        }
+
+        #recBtn { background-color: #ef4444; color: white; }
+        #stopBtn { background-color: #64748b; color: white; }
+        #playBtn { background-color: #22c55e; color: white; }
+
+        button:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .recording-pulse {
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
     </style>
-    <script>window.ga = window.ga || function() { (ga.q = ga.q || []).push(arguments) };</script>
 </head>
 <body>
-    <canvas></canvas>
 
-    <div id="stats-display">KALIBRIERUNG...</div>
+    <div id="status">Bereit zum Verbinden</div>
+
+    <div id="touchpad">
+        <div id="dot"></div>
+    </div>
+
+    <div class="controls">
+        <button id="connectBtn" onclick="connectBLE()">VERBINDEN</button>
+        <button id="recBtn" onclick="startRecording()" disabled>REC</button>
+        <button id="stopBtn" onclick="stopRecording()" disabled>STOP</button>
+        <button id="playBtn" onclick="startPlayback()" disabled>PLAY LOOP</button>
+    </div>
+
+    <script>
+        let char;
+        let isDragging = false;
+        let recording = [];
+        let isRecording = false;
+        let isPlaying = false;
+        let playbackTimer;
+
+        const SERVICE_UUID = '00001214-0000-1000-8000-00805f9b34fb';
+        const CHAR_UUID    = '00001215-0000-1000-8000-00805f9b34fb';
+        const CTRL_UUID = '00001216-0000-1000-8000-00805f9b34fb';
+
+        const dot = document.getElementById('dot');
+        const pad = document.getElementById('touchpad');
+        const status = document.getElementById('status');
+
+        // Befehle senden
+        async function sendCommand(cmd) {
+            if (ctrlChar) {
+                await ctrlChar.writeValue(new Uint8Array([cmd]));
+            }
+        }
+
+        // In startRecording()
+        sendCommand(1); 
+
+        // In startPlayback()
+        sendCommand(2);
+
+        // In stopRecording()
+        sendCommand(0);
+        async function connectBLE() {
+            try {
+                const device = await navigator.bluetooth.requestDevice({
+                    acceptAllDevices: true,
+                    optionalServices: [SERVICE_UUID]
+                });
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                char = await service.getCharacteristic(CHAR_UUID);
+                
+                status.innerText = "Verbunden ✓";
+                document.getElementById('connectBtn').style.display = 'none';
+                document.getElementById('recBtn').disabled = false;
+            } catch (e) {
+                status.innerText = "Fehler: " + e.message;
+            }
+        }
+
+        // --- STEUERUNGS LOGIK ---
+        pad.addEventListener('pointerdown', (e) => {
+            if (!char) return;
+            isDragging = true;
+            pad.setPointerCapture(e.pointerId);
+            updatePosition(e);
+        });
+
+        window.addEventListener('pointermove', (e) => {
+            if (isDragging) updatePosition(e);
+        });
+
+        window.addEventListener('pointerup', () => {
+            isDragging = false;
+            if (!isPlaying && char) sendIntensity(0);
+            dot.style.transition = "all 0.3s ease-out";
+            dot.style.left = '118px';
+            dot.style.top = '118px';
+        });
+let lastSentTime = 0;
+        function updatePosition(e) {
+            const now = Date.now();
+            // Nur alle 30ms ein Paket schicken (ca. 33 Hz)
+            if (now - lastSentTime < 30) return; 
+            lastSentTime = now;
+            const rect = pad.getBoundingClientRect();
+            let x = e.clientX - rect.left - 140;
+            let y = e.clientY - rect.top - 140;
+
+            const maxRadius = 110;
+            const distance = Math.sqrt(x * x + y * y);
+
+            if (distance > maxRadius) {
+                x *= maxRadius / distance;
+                y *= maxRadius / distance;
+            }
+
+            dot.style.transition = "none";
+            dot.style.left = (x + 118) + 'px';
+            dot.style.top = (y + 118) + 'px';
+
+          const intensity = Math.min(127, Math.floor((distance / maxRadius) * 127));
     
-    <div id="controls-right">
-        <button id="connect-serial">XIAO CONNECT</button>
-        <button id="autopilot-btn">GYRO SYNC: AUS</button>
-        <button id="clean-session">SESSION CLEAN</button>
-        
-    </div>
+    if (isRecording) {
+        recording.push(intensity);
+    }
 
-    <div id="ui-container">
-        <div id="phase-label">BEREIT</div>
-        <div style="width: 100%; height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden;">
-            <div id="progress-bar"></div>
-        </div>
-        <div id="timer-display" style="color: rgba(255,255,255,0.6); font-size: 12px; margin-top: 5px;">0.00s / Ø 0.00s</div>
-    </div>
+    if (!isPlaying) sendIntensity(intensity);
+        }
 
-    <canvas id="pulse-canvas"></canvas>
+        async function sendIntensity(val) {
+            if (char) {
+                await char.writeValueWithoutResponse(new Uint8Array([val]));
+            }
+        }
 
-    <script src="./script.js"></script>
+        // --- REC / PLAYBACK LOGIK ---
+        function startRecording() {
+            recording = [];
+            isRecording = true;
+            isPlaying = false;
+            status.innerText = "🔴 Aufnahme...";
+            document.getElementById('recBtn').classList.add('recording-pulse');
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('playBtn').disabled = true;
+        }
+
+        function stopRecording() {
+            isRecording = false;
+            isPlaying = false;
+            clearTimeout(playbackTimer);
+            document.getElementById('recBtn').classList.remove('recording-pulse');
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('playBtn').disabled = recording.length === 0;
+            status.innerText = "Loop bereit (" + recording.length + " pts)";
+            sendIntensity(0);
+        }
+
+        function startPlayback() {
+            if (recording.length === 0) return;
+            isPlaying = true;
+            status.innerText = "▶️ Loop aktiv";
+            document.getElementById('stopBtn').disabled = false;
+            playStep(0);
+        }
+
+        function playStep(index) {
+            if (!isPlaying) return;
+            
+            sendIntensity(recording[index]);
+
+            let nextIndex = (index + 1) % recording.length;
+            // Wir streamen mit ca. 20 Hz (50ms) für flüssiges Gefühl
+            playbackTimer = setTimeout(() => playStep(nextIndex), 50);
+        }
+    </script>
 </body>
 </html>

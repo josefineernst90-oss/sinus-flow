@@ -64,7 +64,7 @@
   .tile .art {
     flex: 1; 
     width: 100%; 
-    min-height: 0; /* Das ist der magische Trick: Zwingt Flexbox, den Platz zu begrenzen */
+    min-height: 0; 
     display: flex; 
     align-items: center; 
     justify-content: center;
@@ -75,7 +75,7 @@
   
   .tile .art img {
     max-width: 100%;
-    max-height: 100%; /* Verhindert, dass das Bild größer als der Container wird */
+    max-height: 100%; 
     object-fit: contain;
     display: block;
   }
@@ -165,7 +165,27 @@
 
 <div id="stage"></div>
 
-<!-- Trainer-Panel -->
+<!-- NEU: Der gemeinsame Patienten-Such-Modus (Full Screen, reizarm) -->
+<div class="overlay" id="patientSearchOverlay" style="background: var(--bg); z-index: 50; display: none; flex-direction: column;">
+  <div style="padding: clamp(14px, 3vw, 40px); display: flex; gap: 14px; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line);">
+    <button class="btn" id="closePatientSearch" style="font-size: 18px;">✕ Zurück</button>
+    <input type="text" id="bigSearchInput" placeholder="Begriff eingeben..." style="flex: 1; font-size: 24px; padding: 14px 20px; border-radius: 12px;">
+    <button class="btn primary" id="bigSearchBtn" style="font-size: 20px; padding: 14px 30px;">Suchen</button>
+  </div>
+  
+  <div id="bigSearchResults" style="flex: 1; overflow-y: auto; padding: clamp(14px, 3vw, 40px); display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: clamp(14px, 3vw, 40px); align-content: start;">
+    <div style="grid-column: 1/-1; text-align: center; color: var(--muted); font-size: 24px; margin-top: 10vh;">
+      Suche nach einem Begriff, um gemeinsam Bilder auszuwählen.
+    </div>
+  </div>
+
+  <!-- NEU: Bestätigungs-Leiste für den Trainer -->
+  <div id="trainerConfirmBar" style="display: none; padding: 20px clamp(14px, 3vw, 40px); background: var(--panel); border-top: 2px solid var(--accent); justify-content: space-between; align-items: center; box-shadow: 0 -10px 30px rgba(0,0,0,0.5);">
+    <div style="font-size: 22px;">Gewählt: <b id="confirmTargetName" style="color: var(--ok);">Keine</b></div>
+    <button class="btn primary" id="confirmAddBtn" style="font-size: 20px; padding: 14px 30px; background: var(--ok); border-color: var(--ok); color: #000;">In App übernehmen ✓</button>
+  </div>
+</div>
+
 <div class="overlay" id="overlay">
   <div class="panel" onclick="event.stopPropagation()">
     <div class="row" style="margin-top:0">
@@ -174,18 +194,16 @@
     </div>
 
     <h3>Kacheln</h3>
+    <div class="row">
+      <button class="btn primary" id="openPatientSearchBtn" style="flex: 1; font-size: 16px; padding: 12px;">🔍 Gemeinsam suchen</button>
+    </div>
+    
     <div id="tileList"></div>
         <div class="row">
       <input type="text" id="arasaacSearch" placeholder="Symbol suchen (z. B. Wald, Hund, trinken)" style="flex:1">
       <button class="btn" id="btnArasaac">Suchen</button>
     </div>
-    <div id="arasaacResults" style="display:flex;gap:8px;overflow-x:auto;padding:4px 0;margin-bottom:10px;"></div>
-        <div class="row">
-      <input type="text" id="newLabel" placeholder="Beschriftung">
-    </div>
-    <div class="row">
-      <input type="text" id="newLabel" placeholder="Beschriftung (z. B. Hund)">
-    </div>
+
     <div class="row">
       <input type="text" id="newEmoji" placeholder="Emoji/Text (Fallback ohne Bild)" style="flex:1">
       <button class="btn" id="pickImg">Bild…</button>
@@ -195,7 +213,7 @@
     <div class="hint" id="addHint"></div>
 
     <h3>Aufgabe / Test</h3>
-    <div class="hint">Ziel-Kachel oben antippen (Stern), dann Bewegung beobachten. Trifft der Patient die richtige Kachel?</div>
+    <div class="hint">Ziel-Kachel oben antippen (Stern), dann Bewegung beobachten. Wird die richtige Kachel getroffen?</div>
     <div class="row">
       <span class="pill" id="trialPill">Kein Ziel gesetzt</span>
       <span class="spacer"></span>
@@ -268,30 +286,43 @@
 const SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
 const CHAR_UUID    = "19b10001-e8f2-537e-4f6c-d104768a1214";
 
-const LS_TILES = "ks_tiles_v1";
-const LS_CFG   = "ks_cfg_v1";
 
 /* ---------- Zustand ---------- */
+// WICHTIG: Ich habe hier den Speichernamen auf v2 geändert!
+const LS_TILES = "ks_tiles_v2"; 
+const LS_CFG   = "ks_cfg_v1";
+
 let tiles = load(LS_TILES, [
-  { id: id(), label: "Ja",   emoji: "👍", img: null },
-  { id: id(), label: "Nein", emoji: "👎", img: null },
+  { id: id(), label: "Ja",       emoji: null, img: "https://static.arasaac.org/pictograms/5584/5584_300.png" },
+  { id: id(), label: "Nein",     emoji: null, img: "https://static.arasaac.org/pictograms/5526/5526_300.png" },
+  { id: id(), label: "Kopfteil absenken",  emoji: null, img: "https://static.arasaac.org/pictograms/26660/26660_300.png" }, // Ersetze 5432 durch die echte ID
+  { id: id(), label: "Bett hochstellen",    emoji: null, img: "https://static.arasaac.org/pictograms/27296/27296_300.png" }, // Ersetze 5433 durch die echte ID
+  { id: id(), label: "Essen", emoji: null, img: "https://static.arasaac.org/pictograms/2349/2349_300.png" }, // Ersetze 5434 durch die echte ID
+  { id: id(), label: "Trinken",    emoji: null, img: "https://static.arasaac.org/pictograms/2276/2276_300.png" }  // Ersetze 5435 durch die echte ID
 ]);
 let cfg = Object.assign({
-  dwellOn: true, dwellMs: 2500, coolMs: 500, sensitivity: 15, perRow: 2, // perRow hinzugefügt
+  dwellOn: true, dwellMs: 2500, coolMs: 500, sensitivity: 15, perRow: 2, 
   vertical: false, dim: true, sound: true, targetId: null,
 }, load(LS_CFG, {}));
 
 let current = 0;
-let dispLevel = 0;               // angezeigter Live-Pegel (mit Decay)
-let lastMotionTs = 0;            // für Entprellung (App-Seite)
+let dispLevel = 0;               
+let lastMotionTs = 0;            
 let dwellTimer = null, dwellRAF = null, dwellStart = 0;
 let logEntries = [];
-let trialStart = null;           // Zeitstempel Trialbeginn
+let trialStart = null;           
 let device = null, server = null, characteristic = null;
 let audio = null;
-let speaking = false;            // blockiert Eingaben während Audio-Wiedergabe
+let speaking = false;            
+
+// Status für die gemeinsame Suche
+let inPatientSearch = false;
+let searchResultsEls = [];
+let currentSearchIdx = 0;
+let searchDwellTimer = null, searchDwellRAF = null, searchDwellStart = 0;
+
 let mediaRec = null, recChunks = [], recTileId = null, recTimer = null, recStream = null;
-const audioCache = {};           // tileId -> vorbereitetes Audio-Element (schneller Start)
+const audioCache = {};           
 
 /* ---------- Hilfen ---------- */
 function id(){ return Math.random().toString(36).slice(2,9); }
@@ -300,7 +331,7 @@ function save(){ try{ localStorage.setItem(LS_TILES,JSON.stringify(tiles)); loca
 const $ = s => document.querySelector(s);
 function now(){ return Date.now(); }
 
-/* ---------- Audio (kurze Beeps, keine Dateien) ---------- */
+/* ---------- Audio (kurze Beeps) ---------- */
 function beep(freq, ms){
   if(!cfg.sound) return;
   try{
@@ -316,28 +347,23 @@ function beep(freq, ms){
 }
 
 /* ============================================================
-   Rendern
-   ============================================================ */
-/* ============================================================
-   Rendern
+   Rendern (Hauptbühne)
    ============================================================ */
 function renderStage(){
   const stage = $("#stage");
   stage.className = (cfg.vertical?"vertical ":"") + (cfg.dim?"dim":"");
   
-  // Dynamisches CSS Grid anwenden
   if (cfg.vertical) {
     stage.style.display = "flex";
   } else {
     stage.style.display = "grid";
     stage.style.gridTemplateColumns = `repeat(${cfg.perRow}, 1fr)`;
-    stage.style.gridAutoRows = "1fr"; // Hält alle Reihen gleich hoch
+    stage.style.gridAutoRows = "1fr"; 
   }
 
   stage.innerHTML = "";
   if(tiles.length===0) return;
 
-  // Alle Kacheln rendern
   tiles.forEach((t, gi)=>{
     const el = document.createElement("div");
     el.className = "tile" + (gi===current?" active":"");
@@ -351,40 +377,45 @@ function renderStage(){
     el.addEventListener("click", ()=>{ setActive(gi, "tippen"); });
     stage.appendChild(el);
   });
-
   updateRing(0);
 }
 
 function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
-/* ---------- aktive Kachel setzen ---------- */
 function setActive(i, reason){
   if(tiles.length===0) return;
   current = ((i % tiles.length) + tiles.length) % tiles.length;
-  renderStage();                                // zeichnet die richtige Seite + Highlight
+  renderStage(); 
   startDwell();
 }
 
-/* ---------- ein Bewegungs-Event ---------- */
+/* ---------- Bewegungs-Logik ---------- */
 function onMotion(reason){
-  if(speaking) return;                          // während Audio-Feedback keine Eingaben
+  if(speaking) return; 
   const t = now();
-  if(t - lastMotionTs < cfg.coolMs) return;     // App-seitige Entprellung
+  if(t - lastMotionTs < cfg.coolMs) return; 
   lastMotionTs = t;
   beep(660, 70);
-  const next = (current + 1) % tiles.length;
-  log("switch", tiles[current]?.label, {to: tiles[next]?.label, src:reason});
-  setActive(next, reason);
+
+  if(inPatientSearch) {
+    if(searchResultsEls.length === 0) return;
+    currentSearchIdx = (currentSearchIdx + 1) % searchResultsEls.length;
+    setSearchActive(currentSearchIdx);
+  } else {
+    const next = (current + 1) % tiles.length;
+    log("switch", tiles[current]?.label, {to: tiles[next]?.label, src:reason});
+    setActive(next, reason);
+  }
 }
 
-/* ---------- Dwell-Auswahl ---------- */
+/* ---------- Dwell-Auswahl (Hauptbühne) ---------- */
 function startDwell(){
   clearDwell();
-  const ring = document.querySelector(".tile.active .ring");
+  const ring = document.querySelector("#stage .tile.active .ring");
   if(!cfg.dwellOn){ if(ring) ring.classList.add("off"); return; }
   if(ring) ring.classList.remove("off");
   dwellStart = performance.now();
-  const fg = document.querySelector(".tile.active .ring .fg");
+  const fg = document.querySelector("#stage .tile.active .ring .fg");
   const C = 150.8;
   const tick = ()=>{
     const p = Math.min(1,(performance.now()-dwellStart)/cfg.dwellMs);
@@ -399,40 +430,39 @@ function clearDwell(){
   if(dwellRAF) cancelAnimationFrame(dwellRAF);
   dwellTimer = dwellRAF = null;
 }
-function updateRing(){ const fg=document.querySelector(".tile.active .ring .fg"); if(fg) fg.style.strokeDashoffset="150.8"; }
+function updateRing(){ const fg=document.querySelector("#stage .tile.active .ring .fg"); if(fg) fg.style.strokeDashoffset="150.8"; }
 
 function select(){
   clearDwell();
   const chosen = tiles[current];
-  speaking = true;                       // sperrt Eingaben bis die Bestätigung durch ist
+  speaking = true; 
 
   const confirm = ()=>{
     if(!speaking) return;
     speaking = false;
-    const el = document.querySelector(".tile.active");
-    if(el) el.classList.add("selected");  // Häkchen ZULETZT
-    finalizeSelect(chosen);               // dann erst loggen
+    const el = document.querySelector("#stage .tile.active");
+    if(el) el.classList.add("selected"); 
+    finalizeSelect(chosen); 
   };
 
   if(chosen && chosen.audio){
-    const a = getTileAudioEl(chosen) || new Audio(chosen.audio);  // erst die Aufnahme...
+    const a = getTileAudioEl(chosen) || new Audio(chosen.audio); 
     try{ a.currentTime = 0; }catch(e){}
     a.onended = confirm;
     a.onerror = confirm;
     const p = a.play();
     if(p && p.catch) p.catch(confirm);
   } else {
-    beep(880,140); setTimeout(()=>beep(1175,160),120);  // ...oder Bestätigungstöne
-    setTimeout(confirm, 320);             // ...DANN das Häkchen
+    beep(880,140); setTimeout(()=>beep(1175,160),120); 
+    setTimeout(confirm, 320); 
   }
 }
 function finalizeSelect(chosen){
-  let correct = null;
-  let ms = null;
+  let correct = null; let ms = null;
   if(cfg.targetId){
     correct = (chosen && chosen.id===cfg.targetId);
     if(trialStart) ms = now()-trialStart;
-    trialStart = now(); // nächster Trial startet
+    trialStart = now(); 
   }
   log("select", chosen?.label, {correct, ms});
 }
@@ -442,9 +472,8 @@ function finalizeSelect(chosen){
    ============================================================ */
 async function connect(){
   if(!navigator.bluetooth){
-    setStatus("Web-Bluetooth fehlt – Chrome/Edge nutzen (kein Safari/Firefox).", false);
-    alert("Dieser Browser kann kein Web-Bluetooth.\n\nFunktioniert mit:\n• Chrome / Edge (PC, Android)\n• iPad/iPhone nur mit der App „Bluefy“\n\nNicht: Safari, Firefox.");
-    return;
+    setStatus("Web-Bluetooth fehlt.", false);
+    alert("Dieser Browser kann kein Web-Bluetooth."); return;
   }
   try{
     setStatus("Suche Gerät…", false);
@@ -454,9 +483,7 @@ async function connect(){
     });
     device.addEventListener("gattserverdisconnected", onDisconnect);
     await connectGatt();
-  }catch(e){
-    setStatus("Abgebrochen: "+(e.message||e), false);
-  }
+  }catch(e){ setStatus("Abgebrochen.", false); }
 }
 async function connectGatt(){
   setStatus("Verbinde…", false);
@@ -465,27 +492,25 @@ async function connectGatt(){
   characteristic = await svc.getCharacteristic(CHAR_UUID);
   await characteristic.startNotifications();
   characteristic.addEventListener("characteristicvaluechanged", onNotify);
-  setStatus("Verbunden: "+(device.name||"XiaoSwitch"), true);
-  beep(523,120);
+  setStatus("Verbunden", true); beep(523,120);
 }
 function onNotify(ev){
-  const v = ev.target.value.getUint8(0);    // Bewegungsstärke (g*100, 0..255)
-  feedLevel(v);                             // Live-Pegel im Trainer-Menü
-  if(v >= cfg.sensitivity) onMotion("ble"); // Schwelle in der App; onMotion entprellt selbst
+  const v = ev.target.value.getUint8(0); 
+  feedLevel(v); 
+  if(v >= cfg.sensitivity) onMotion("ble"); 
 }
 function onDisconnect(){
-  setStatus("Verbindung getrennt – versuche erneut…", false);
+  setStatus("Getrennt – versuche erneut…", false);
   let tries=0;
   const retry=async()=>{
     if(!device) return;
     try{ await connectGatt(); }
-    catch(e){ if(tries++<6) setTimeout(retry,1500); else setStatus("Getrennt. „Verbinden“ erneut drücken.", false); }
+    catch(e){ if(tries++<6) setTimeout(retry,1500); else setStatus("Getrennt.", false); }
   };
   setTimeout(retry, 1200);
 }
 function setStatus(txt, ok){
-  $("#status").textContent = txt;
-  $("#dot").classList.toggle("on", !!ok);
+  $("#status").textContent = txt; $("#dot").classList.toggle("on", !!ok);
 }
 
 /* ============================================================
@@ -529,7 +554,7 @@ function exportCsv(){
 }
 
 /* ============================================================
-   Trainer-Panel: Kacheln verwalten
+   Trainer-Panel: Kacheln verwalten & Audio
    ============================================================ */
 function renderTileList(){
   const box = $("#tileList"); box.innerHTML="";
@@ -553,6 +578,7 @@ function renderTileList(){
     box.appendChild(card);
   });
 }
+
 function tileAction(i, act){
   if(act==="rec"){ toggleRecord(i); return; }
   if(act==="play"){ playAudio(i); return; }
@@ -563,11 +589,10 @@ function tileAction(i, act){
   save(); renderTileList(); renderStage(); updateTrialPill();
 }
 
-/* ---------- Audio pro Kachel: aufnehmen / vorhören ---------- */
 function playAudio(i){ const t=tiles[i]; if(t&&t.audio){ try{ new Audio(t.audio).play(); }catch(e){} } }
 
 function toggleRecord(i){
-  if(recTileId!==null){ stopRecord(); return; }   // läuft schon -> stoppen
+  if(recTileId!==null){ stopRecord(); return; }
   startRecord(i);
 }
 async function startRecord(i){
@@ -591,15 +616,15 @@ async function startRecord(i){
       if(idx>=0){
         tiles[idx].audio = fr.result;
         if(!save()){ tiles[idx].audio = null; save();
-          alert("Speicher voll – Aufnahme zu groß oder zu viele Medien.\nKürzer aufnehmen oder ein Bild/Audio entfernen."); }
+          alert("Speicher voll – Aufnahme zu groß."); }
       }
       cleanupRec(); renderTileList(); warmAudioCache();
     };
     fr.readAsDataURL(blob);
   };
   mediaRec.start();
-  renderTileList();                          // Knopf zeigt jetzt ⏹
-  recTimer = setTimeout(stopRecord, 8000);   // Sicherheits-Limit 8 s
+  renderTileList(); 
+  recTimer = setTimeout(stopRecord, 8000); 
 }
 function stopRecord(){
   if(recTimer){ clearTimeout(recTimer); recTimer=null; }
@@ -610,7 +635,6 @@ function cleanupRec(){
   mediaRec=null; recTileId=null; recChunks=[];
 }
 
-/* ---------- Audio vorbereiten: dataURL -> Blob-URL, vorgeladen ---------- */
 function dataURLtoBlob(d){
   const i = d.indexOf(",");
   const mime = (d.slice(0,i).match(/data:([^;]+)/) || [])[1] || "audio/webm";
@@ -622,7 +646,7 @@ function dataURLtoBlob(d){
 function getTileAudioEl(t){
   if(!t || !t.audio) return null;
   const c = audioCache[t.id];
-  if(c && c.src===t.audio) return c.el;          // schon vorbereitet
+  if(c && c.src===t.audio) return c.el;
   if(c && c.url){ try{ URL.revokeObjectURL(c.url); }catch(e){} }
   let url=null, el;
   try{
@@ -640,7 +664,7 @@ function updateTrialPill(){
   else { pill.textContent = "Kein Ziel gesetzt"; pill.className="pill"; }
 }
 
-/* Bild laden + verkleinern (klein halten für localStorage) */
+/* Bild laden (Manuell) */
 let pendingImg = null;
 $("#pickImg").onclick = ()=>$("#fileInput").click();
 $("#fileInput").onchange = e=>{
@@ -654,7 +678,7 @@ $("#fileInput").onchange = e=>{
       c.width=Math.round(im.width*sc); c.height=Math.round(im.height*sc);
       c.getContext("2d").drawImage(im,0,0,c.width,c.height);
       pendingImg = c.toDataURL("image/jpeg",0.85);
-      $("#addHint").textContent = "Bild bereit ("+Math.round(pendingImg.length/1024)+" KB). Jetzt „Kachel hinzufügen“.";
+      $("#addHint").textContent = "Bild bereit. Jetzt „Kachel hinzufügen“.";
     };
     im.src = r.result;
   };
@@ -674,8 +698,6 @@ $("#addTile").onclick = ()=>{
    Einstellungen verkabeln
    ============================================================ */
 function bindToggle(idStr,key,after){ const el=$(idStr); el.checked=cfg[key]; el.onchange=()=>{cfg[key]=el.checked; save(); after&&after();}; }
-
-// NEU: bindRange um den Parameter 'after' erweitert
 function bindRange(idStr,valStr,key,suffix,after){ 
   const el=$(idStr),v=$(valStr); el.value=cfg[key];
   const upd=()=>{ v.textContent=cfg[key]+suffix; }; upd();
@@ -686,15 +708,12 @@ bindToggle("#dwellOn","dwellOn", ()=>startDwell());
 bindToggle("#vertical","vertical", renderStage);
 bindToggle("#dim","dim", renderStage);
 bindToggle("#sound","sound");
-// Füge diese Zeile zu den anderen bind-Aufrufen hinzu:
 bindRange("#perRow","#perRowVal","perRow","x", renderStage);
-
 bindRange("#dwellMs","#dwellVal","dwellMs"," ms");
 bindRange("#coolMs","#coolVal","coolMs"," ms");
-/* Empfindlichkeit + Live-Pegel */
+
 const sensEl=$("#sens"), sensV=$("#sensVal"), lvlMark=$("#lvlMark"), lvlFill=$("#lvlFill");
-function positionMark(){ if(lvlMark) lvlMark.style.left = Math.min(100,cfg.sensitivity)+"%"; }
-function updSens(){ sensV.textContent=(cfg.sensitivity/100).toFixed(2)+" g"; positionMark(); }
+function updSens(){ sensV.textContent=(cfg.sensitivity/100).toFixed(2)+" g"; if(lvlMark) lvlMark.style.left = Math.min(100,cfg.sensitivity)+"%"; }
 sensEl.value=cfg.sensitivity; updSens();
 sensEl.oninput=()=>{ cfg.sensitivity=+sensEl.value; updSens(); save(); };
 function feedLevel(v){ dispLevel = Math.max(dispLevel, Math.min(100, v)); }
@@ -705,87 +724,197 @@ $("#resetLog").onclick=()=>{ logEntries=[]; renderLog(); };
 $("#exportLog").onclick=exportCsv;
 $("#simBtn").onclick=()=>{ feedLevel(60); onMotion("test"); };
 
-/* ---------- Panel öffnen/schließen ---------- */
-$("#gearBtn").onclick=()=>{ $("#overlay").classList.add("show"); renderTileList(); updateTrialPill(); };
-$("#closePanel").onclick=()=>$("#overlay").classList.remove("show");
-$("#overlay").onclick=()=>$("#overlay").classList.remove("show");
+$("#gearBtn").onclick=()=>{ $("#overlay").classList.add("show"); renderTileList(); clearDwell(); };
+$("#closePanel").onclick=()=>{ $("#overlay").classList.remove("show"); startDwell(); };
 $("#connectBtn").onclick=connect;
 $("#fsBtn").onclick=()=>{ if(!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.(); };
 
-/* Leertaste = Test-Bewegung (nur außerhalb von Textfeldern) */
 window.addEventListener("keydown",e=>{
   if(e.code==="Space" && !/input|textarea/i.test(e.target.tagName)){ e.preventDefault(); feedLevel(60); onMotion("taste"); }
 });
+
 /* ============================================================
-   ARASAAC API Integration
+   Dwell-Steuerung für die Patienten-Suche
    ============================================================ */
-$("#btnArasaac").onclick = async () => {
-  const q = $("#arasaacSearch").value.trim();
+function setSearchActive(idx) {
+  searchResultsEls.forEach((el, i) => {
+    if(i === idx) el.classList.add("active");
+    else el.classList.remove("active");
+  });
+  startSearchDwell();
+}
+
+function startSearchDwell(){
+  clearSearchDwell();
+  const ring = document.querySelector("#bigSearchResults .tile.active .ring");
+  if(!cfg.dwellOn){ if(ring) ring.classList.add("off"); return; }
+  if(ring) ring.classList.remove("off");
+  
+  searchDwellStart = performance.now();
+  const fg = document.querySelector("#bigSearchResults .tile.active .ring .fg");
+  const C = 150.8;
+  const tick = ()=>{
+    const p = Math.min(1,(performance.now()-searchDwellStart)/cfg.dwellMs);
+    if(fg) fg.style.strokeDashoffset = String(C*(1-p));
+    if(p<1) searchDwellRAF = requestAnimationFrame(tick);
+  };
+  searchDwellRAF = requestAnimationFrame(tick);
+  searchDwellTimer = setTimeout(selectSearch, cfg.dwellMs);
+}
+
+function clearSearchDwell(){
+  if(searchDwellTimer) clearTimeout(searchDwellTimer);
+  if(searchDwellRAF) cancelAnimationFrame(searchDwellRAF);
+  searchDwellTimer = searchDwellRAF = null;
+}
+
+function selectSearch() {
+  clearSearchDwell();
+  const activeEl = searchResultsEls[currentSearchIdx];
+  if(activeEl) activeEl.click(); 
+}
+/* ============================================================
+   Gemeinsamer Patienten-Such-Modus (ARASAAC)
+   ============================================================ */
+let pendingSearchSelection = null; // Speichert die temporäre Auswahl
+
+$("#openPatientSearchBtn").onclick = () => {
+  $("#overlay").classList.remove("show"); 
+  $("#patientSearchOverlay").style.display = "flex"; 
+  inPatientSearch = true; 
+  pendingSearchSelection = null;
+  $("#trainerConfirmBar").style.display = "none";
+  setTimeout(() => $("#bigSearchInput").focus(), 100);
+};
+
+$("#closePatientSearch").onclick = () => {
+  $("#patientSearchOverlay").style.display = "none";
+  $("#bigSearchResults").innerHTML = `<div style="grid-column:1/-1; text-align:center; color:var(--muted); font-size:24px; margin-top:10vh;">Suche nach einem Begriff, um gemeinsam Bilder auszuwählen.</div>`;
+  $("#bigSearchInput").value = "";
+  $("#trainerConfirmBar").style.display = "none";
+  
+  inPatientSearch = false; 
+  clearSearchDwell();
+  renderStage(); 
+};
+
+$("#bigSearchBtn").onclick = async () => {
+  const q = $("#bigSearchInput").value.trim();
   if(!q) return;
   
-  const resDiv = $("#arasaacResults");
-  resDiv.innerHTML = "<span class='hint'>Sucht...</span>";
+  const resDiv = $("#bigSearchResults");
+  resDiv.innerHTML = "<div style='grid-column: 1/-1; text-align:center; font-size: 24px;'>Suche läuft...</div>";
+  clearSearchDwell();
+  searchResultsEls = [];
+  currentSearchIdx = 0;
+  pendingSearchSelection = null;
+  $("#trainerConfirmBar").style.display = "none";
   
   try {
-    // 1. Suche nach dem Begriff auf Deutsch
     const resp = await fetch(`https://api.arasaac.org/api/pictograms/de/search/${encodeURIComponent(q)}`);
     const data = await resp.json();
     
-    if(!data || data.length === 0) { 
-      resDiv.innerHTML = "<span class='hint'>Kein Piktogramm gefunden.</span>"; 
-      return; 
+    if(!data || data.length === 0) {
+      resDiv.innerHTML = "<div style='grid-column: 1/-1; text-align:center; font-size: 24px; color: var(--bad);'>Leider kein Symbol gefunden.</div>";
+      return;
     }
-
+    
     resDiv.innerHTML = "";
     
-    // 2. Zeige die ersten 10 Treffer als klickbare Bilder an
-    data.slice(0, 10).forEach(pic => {
-      // 300px Auflösung ist ideal für die Kacheln
-      const imgUrl = `https://static.arasaac.org/pictograms/${pic._id}/${pic._id}_300.png`;
-      const imgEl = document.createElement("img");
+    data.slice(0, 12).forEach(pic => {
+      const imgUrl = `https://static.arasaac.org/pictograms/${pic._id}/${pic._id}_500.png`;
+      const bestLabel = pic.keywords[0]?.keyword || q; 
       
-      imgEl.src = imgUrl;
-      imgEl.style.cssText = "height:54px; width:54px; object-fit:contain; cursor:pointer; background:#fff; border-radius:8px; border:2px solid transparent;";
-      imgEl.title = pic.keywords.map(k => k.keyword).join(", "); // Zeigt beim Hovern alternative Bedeutungen
+      const card = document.createElement("div");
+      card.className = "tile"; 
+      card.style.cursor = "pointer";
+      card.style.transform = "none"; 
       
-      // 3. Beim Klick: Bild herunterladen und für Offline-Nutzung in Base64 umwandeln
-      imgEl.onclick = async () => {
-        $("#addHint").textContent = "Lade Symbol herunter...";
-        resDiv.querySelectorAll("img").forEach(i => i.style.borderColor = "transparent");
-        imgEl.style.borderColor = "var(--accent)"; // Visuelles Feedback
+      card.innerHTML = `
+        <svg class="ring off" viewBox="0 0 54 54"><circle class="bg" cx="27" cy="27" r="24"/><circle class="fg" cx="27" cy="27" r="24" stroke-dasharray="150.8" stroke-dashoffset="150.8"/></svg>
+        <div class="art" style="min-height:0; display:flex; align-items:center; justify-content:center; padding:10px;">
+          <img src="${imgUrl}" style="max-width:100%; max-height:100%; object-fit:contain; display:block;">
+        </div>
+        <div class="label">${escapeHtml(bestLabel)}</div>
+        <div class="check">✓</div> <!-- Nutzt das bestehende CSS-Häkchen -->
+      `;
+
+      // Klick oder Dwell-Auswahl durch den Patienten
+      card.onclick = () => {
+        clearSearchDwell();
+        beep(880,100);
         
-        try {
-          const imgResp = await fetch(imgUrl);
-          const blob = await imgResp.blob();
-          const reader = new FileReader();
-          reader.onload = () => {
-            pendingImg = reader.result; // Speichert das Base64-Bild in deiner bestehenden Variable
-            // Übernehme das erste Keyword direkt als Vorschlag für die Kachel-Beschriftung
-            if(!$("#newLabel").value) $("#newLabel").value = pic.keywords[0]?.keyword || q;
-            $("#addHint").textContent = "Piktogramm geladen! Jetzt 'Kachel hinzufügen' klicken.";
-          };
-          reader.readAsDataURL(blob);
-        } catch(e) {
-          $("#addHint").textContent = "Fehler beim Herunterladen des Bildes.";
-        }
+        // Alte Auswahlen entfernen
+        searchResultsEls.forEach(el => el.classList.remove("selected"));
+        
+        // Diese Kachel grün markieren
+        card.classList.add("selected");
+        
+        // Daten für die Trainer-Bestätigung bereitlegen
+        pendingSearchSelection = { imgUrl, bestLabel, card };
+        $("#confirmTargetName").textContent = bestLabel;
+        $("#trainerConfirmBar").style.display = "flex";
       };
       
-      resDiv.appendChild(imgEl);
+      searchResultsEls.push(card);
+      resDiv.appendChild(card);
     });
-  } catch(e) {
-    resDiv.innerHTML = "<span class='hint' style='color:var(--bad)'>Netzwerkfehler bei der Suche.</span>";
+    
+    if(searchResultsEls.length > 0) setSearchActive(0);
+    
+  } catch (e) {
+     resDiv.innerHTML = "<div style='grid-column: 1/-1; text-align:center; font-size: 24px; color: var(--bad);'>Netzwerkfehler. Bitte Internetverbindung prüfen.</div>";
   }
 };
 
-// Optional: Suche auch mit der Enter-Taste auslösen
-$("#arasaacSearch").addEventListener("keypress", (e) => {
-  if (e.key === "Enter") $("#btnArasaac").click();
+$("#bigSearchInput").addEventListener("keypress", (e) => {
+  if (e.key === "Enter") $("#bigSearchBtn").click();
 });
+
+// NEU: Der Trainer bestätigt die Auswahl endgültig
+$("#confirmAddBtn").onclick = async () => {
+  if (!pendingSearchSelection) return;
+  const { imgUrl, bestLabel, card } = pendingSearchSelection;
+
+  speaking = true; // Sperrt den Sensor, während geladen wird
+  const btn = $("#confirmAddBtn");
+  btn.disabled = true;
+  btn.textContent = "Wird gespeichert...";
+
+  try {
+    const imgResp = await fetch(imgUrl);
+    const blob = await imgResp.blob();
+    const reader = new FileReader();
+    reader.onload = () => {
+      // Speichern
+      tiles.push({ id: id(), label: bestLabel, emoji: null, img: reader.result });
+      save();
+      renderTileList(); 
+      
+      // Visuelles Feedback
+      card.innerHTML = `<div class="check" style="opacity:1; position:static;">✓</div><div class="label" style="color:var(--ok);">Erfolgreich!</div>`;
+      beep(1175, 160);
+      
+      setTimeout(() => {
+        speaking = false;
+        btn.disabled = false;
+        btn.textContent = "In App übernehmen ✓";
+        $("#closePatientSearch").click(); // Geht automatisch zurück
+      }, 1200); 
+    };
+    reader.readAsDataURL(blob);
+  } catch(e) {
+    alert("Fehler beim Herunterladen des Bildes.");
+    speaking = false;
+    btn.disabled = false;
+    btn.textContent = "In App übernehmen ✓";
+  }
+};
 /* ============================================================
    Start
    ============================================================ */
 renderStage();
-renderLog();
+renderTileList();
 updateTrialPill();
 setActive(0,"start");
 </script>

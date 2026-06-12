@@ -1,248 +1,793 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="de">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Limbic Controller Pro</title>
-    <style>
-        :root {
-            --bg: #1e2235;
-            --card: #282c44;
-            --accent: #22d3ee;
-            --text: #f8fafc;
-        }
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kachel-Schalter</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#2a3340;
+    --txt:#e8edf3; --muted:#8a97a6;
+    --tile:#1b2430; --tile-line:#33414f;
+    --accent:#ffcc33;          /* Highlight: warm, hoher Kontrast */
+    --accent-soft:#3a3110;
+    --ok:#39d98a; --bad:#ff5d5d;
+    --tile-r:18px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--txt);
+    font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    overflow:hidden; -webkit-tap-highlight-color:transparent;
+  }
 
-        body {
-            background-color: var(--bg);
-            color: var(--text);
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            display: flex;
-            justify-content: center;
-            padding: 20px;
-            margin: 0;
-        }
+  /* ---------- Kopfzeile (für Trainer) ---------- */
+  header{
+    position:fixed; top:0; left:0; right:0; height:52px; z-index:20;
+    display:flex; align-items:center; gap:10px; padding:0 12px;
+    background:linear-gradient(var(--bg),transparent); 
+  }
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--bad);flex:0 0 auto;box-shadow:0 0 8px currentColor;color:var(--bad)}
+  .dot.on{background:var(--ok);color:var(--ok)}
+  .status{font-size:13px;color:var(--muted);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .spacer{flex:1}
+  button.icon{
+    width:40px;height:40px;border-radius:10px;border:1px solid var(--line);
+    background:var(--panel);color:var(--txt);font-size:18px;cursor:pointer;
+    display:grid;place-items:center;
+  }
+  button.icon:hover{border-color:var(--accent)}
+  .btn{
+    border:1px solid var(--line);background:var(--panel);color:var(--txt);
+    padding:9px 14px;border-radius:10px;cursor:pointer;font-size:14px;
+  }
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);color:#1a1500;border-color:var(--accent);font-weight:600}
+  .btn.danger{border-color:#5a2a2a;color:#ff9d9d}
 
-        .container { width: 100%; max-width: 380px; }
+  /* ---------- Kachel-Bühne (für Patient) ---------- */
+  #stage{
+    position:fixed; inset:52px 0 0 0;
+    display:flex; gap:clamp(14px,3vw,40px);
+    padding:clamp(14px,3vw,40px); align-items:stretch; justify-content:center;
+  }
+  #stage.vertical{flex-direction:column}
+  .tile{
+    flex:1 1 0; min-width:0; min-height:0;
+    background:var(--tile); border:4px solid var(--tile-line);
+    border-radius:var(--tile-r); position:relative; overflow:hidden;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:18px; transition:transform .12s ease, border-color .12s ease, opacity .2s ease;
+    user-select:none;
+  }
+  .tile .art {
+    flex: 1; 
+    width: 100%; 
+    min-height: 0; /* Das ist der magische Trick: Zwingt Flexbox, den Platz zu begrenzen */
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    overflow: hidden;
+    font-size: clamp(60px,16vw,180px); 
+    line-height: 1;
+  }
+  
+  .tile .art img {
+    max-width: 100%;
+    max-height: 100%; /* Verhindert, dass das Bild größer als der Container wird */
+    object-fit: contain;
+    display: block;
+  }
+  /* aktive Kachel */
+  .tile.active{
+    border-color:var(--accent); transform:scale(1.03);
+    box-shadow:0 0 0 6px var(--accent-soft), 0 18px 50px rgba(0,0,0,.5);
+  }
+  /* nicht-aktive abdunkeln (optional, Fokus/Neglect) */
+  #stage.dim .tile:not(.active){opacity:.32}
+  /* Auswahl bestätigt */
+  .tile.selected{border-color:var(--ok);box-shadow:0 0 0 6px rgba(57,217,138,.18)}
+  .tile .check{
+    position:absolute;inset:0;display:grid;place-items:center;
+    font-size:clamp(70px,18vw,200px);color:var(--ok);
+    opacity:0;transition:opacity .2s; pointer-events:none;
+  }
+  .tile.selected .check{opacity:1}
 
-        .card {
-            background: var(--card);
-            padding: 25px;
-            border-radius: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-            text-align: center;
-        }
+  /* Dwell-Fortschrittsring oben rechts in der aktiven Kachel */
+  .ring{position:absolute;top:14px;right:14px;width:54px;height:54px;opacity:0;transition:opacity .15s}
+  .tile.active .ring{opacity:1}
+  .ring.off{opacity:0 !important}
+  .ring circle{fill:none;stroke-width:6}
+  .ring .bg{stroke:rgba(255,255,255,.12)}
+  .ring .fg{stroke:var(--accent);stroke-linecap:round;transform:rotate(-90deg);transform-origin:50% 50%}
 
-        .status-bar {
-            background: rgba(255,255,255,0.05);
-            padding: 10px;
-            border-radius: 12px;
-            margin-bottom: 20px;
-            font-size: 0.9rem;
-        }
+  /* ---------- Overlay (Trainer-Panel) ---------- */
+  .overlay{
+    position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.55);
+    display:none;align-items:stretch;justify-content:flex-end;
+  }
+  .overlay.show{display:flex}
+  .panel{
+    width:min(440px,100%); background:var(--panel); border-left:1px solid var(--line);
+    height:100%; overflow:auto; padding:18px 18px 60px;
+  }
+  .panel h2{margin:6px 0 2px;font-size:18px}
+  .panel h3{margin:22px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+  .row{display:flex;gap:10px;align-items:center;margin:10px 0}
+  .row label{flex:1;font-size:14px}
+  input[type=text],input[type=number]{
+    background:var(--bg);border:1px solid var(--line);color:var(--txt);
+    border-radius:8px;padding:9px 10px;font-size:14px;width:100%;
+  }
+  input[type=range]{width:140px;accent-color:var(--accent)}
+  .level{position:relative;height:16px;border-radius:8px;background:var(--bg);border:1px solid var(--line);margin:6px 0 2px;overflow:hidden}
+  .level .fill{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,var(--ok),var(--accent));transition:width .06s linear}
+  .level .mark{position:absolute;top:0;bottom:0;width:3px;background:var(--bad);left:15%;box-shadow:0 0 5px var(--bad)}
+  .val{width:62px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+  .switch{position:relative;width:46px;height:26px;flex:0 0 auto}
+  .switch input{opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+  .switch .sl{position:absolute;inset:0;background:var(--line);border-radius:20px;transition:.15s;pointer-events:none}
+  .switch .sl::before{content:"";position:absolute;width:20px;height:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.15s}
+  .switch input:checked + .sl{background:var(--accent)}
+  .switch input:checked + .sl::before{transform:translateX(20px)}
 
-        h3 { 
-            margin: 0 0 15px 0; 
-            font-size: 0.8rem; 
-            color: var(--accent); 
-            letter-spacing: 2px; 
-            text-transform: uppercase;
-        }
+  .tilecard{display:flex;gap:10px;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px;margin:8px 0}
+  .tilecard .thumb{width:46px;height:46px;border-radius:8px;background:var(--tile);display:grid;place-items:center;font-size:24px;overflow:hidden;flex:0 0 auto}
+  .tilecard .thumb img{width:100%;height:100%;object-fit:cover}
+  .tilecard .name{flex:1;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tilecard .target{font-size:11px;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:2px 6px}
+  .mini{width:30px;height:30px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--txt);cursor:pointer;font-size:14px}
+  .mini:hover{border-color:var(--accent)}
+  .mini.has{border-color:var(--ok)}
+  .mini.rec{background:var(--bad);border-color:var(--bad);color:#fff;animation:recpulse 1s infinite}
+  @keyframes recpulse{50%{opacity:.55}}
 
-        .sync-grid { text-align: left; margin-bottom: 20px; }
-
-        .switch-label {
-            display: flex;
-            align-items: center;
-            padding: 10px 0;
-            cursor: pointer;
-            font-size: 1rem;
-        }
-
-        .switch-label input { margin-right: 15px; transform: scale(1.4); }
-
-        button {
-            width: 100%;
-            padding: 15px;
-            border-radius: 12px;
-            border: none;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-size: 0.9rem;
-            text-transform: uppercase;
-        }
-
-        .btn-primary { background: var(--accent); color: #1e2235; }
-        .btn-secondary { background: #3d4466; color: white; }
-        .btn-danger { background: #ff5f57; color: white; }
-        .btn-success { background: #00d26a; color: white; }
-        .btn-neutral { background: #5c668b; color: white; }
-
-        button:disabled { opacity: 0.15; cursor: not-allowed; filter: grayscale(1); }
-
-        #touchpad {
-            width: 260px; height: 260px;
-            background: #171a2b;
-            border: 2px solid #3d4466;
-            border-radius: 50%;
-            margin: 20px auto;
-            position: relative;
-            touch-action: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        #dot {
-            width: 44px; height: 44px;
-            background: var(--accent);
-            border-radius: 50%;
-            position: absolute;
-            box-shadow: 0 0 20px var(--accent);
-        }
-
-        .looper-controls { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
-    </style>
+  .log{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:200px;overflow:auto;white-space:pre-wrap}
+  .hint{font-size:12px;color:var(--muted);margin:6px 0}
+  .pill{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:20px;padding:3px 10px;color:var(--muted)}
+  .pill.ok{color:var(--ok);border-color:var(--ok)}
+  .pill.bad{color:var(--bad);border-color:var(--bad)}
+  a{color:var(--accent)}
+</style>
 </head>
 <body>
 
-<div class="container">
-    <div class="card">
-        <div id="status" class="status-bar">Bereit zum Verbinden</div>
-        <button id="connectBtn" class="btn-primary" onclick="connectBLE()">VERBINDEN</button>
+<header>
+  <span id="dot" class="dot" title="Verbindungsstatus"></span>
+  <span id="status" class="status">Nicht verbunden</span>
+  <span class="spacer"></span>
+  <button class="btn primary" id="connectBtn">Verbinden</button>
+  <button class="icon" id="fsBtn" title="Vollbild">⛶</button>
+  <button class="icon" id="gearBtn" title="Trainer-Menü">⚙</button>
+</header>
+
+<div id="stage"></div>
+
+<!-- Trainer-Panel -->
+<div class="overlay" id="overlay">
+  <div class="panel" onclick="event.stopPropagation()">
+    <div class="row" style="margin-top:0">
+      <h2 style="flex:1">Trainer-Menü</h2>
+      <button class="icon" id="closePanel">✕</button>
     </div>
 
-    <div class="card">
-        <h3>MODI AKTIVIEREN</h3>
-        <div class="sync-grid">
-            <label class="switch-label"><input type="checkbox" id="m0" checked> Ocean (Blau)</label>
-            <label class="switch-label"><input type="checkbox" id="m1" checked> Heart (Rot)</label>
-            <label class="switch-label"><input type="checkbox" id="m2" checked> Purr (Grün)</label>
-            <label class="switch-label" style="opacity:0.5;"><input type="checkbox" id="m3" checked disabled> App (Gelb)</label>
-        </div>
-        <button id="syncBtn" class="btn-secondary" onclick="syncSettings()" disabled>SYNC ZUM CHIP</button>
+    <h3>Kacheln</h3>
+    <div id="tileList"></div>
+        <div class="row">
+      <input type="text" id="arasaacSearch" placeholder="Symbol suchen (z. B. Wald, Hund, trinken)" style="flex:1">
+      <button class="btn" id="btnArasaac">Suchen</button>
+    </div>
+    <div id="arasaacResults" style="display:flex;gap:8px;overflow-x:auto;padding:4px 0;margin-bottom:10px;"></div>
+        <div class="row">
+      <input type="text" id="newLabel" placeholder="Beschriftung">
+    </div>
+    <div class="row">
+      <input type="text" id="newLabel" placeholder="Beschriftung (z. B. Hund)">
+    </div>
+    <div class="row">
+      <input type="text" id="newEmoji" placeholder="Emoji/Text (Fallback ohne Bild)" style="flex:1">
+      <button class="btn" id="pickImg">Bild…</button>
+      <input type="file" id="fileInput" accept="image/*" hidden>
+    </div>
+    <div class="row"><button class="btn primary" id="addTile" style="flex:1">Kachel hinzufügen</button></div>
+    <div class="hint" id="addHint"></div>
+
+    <h3>Aufgabe / Test</h3>
+    <div class="hint">Ziel-Kachel oben antippen (Stern), dann Bewegung beobachten. Trifft der Patient die richtige Kachel?</div>
+    <div class="row">
+      <span class="pill" id="trialPill">Kein Ziel gesetzt</span>
+      <span class="spacer"></span>
+      <button class="btn" id="clearTarget">Ziel löschen</button>
     </div>
 
-    <div class="card">
-        <h3>HAPTIC LOOPER</h3>
-        <div id="touchpad">
-            <div id="dot"></div>
-        </div>
-        <div class="looper-controls">
-            <button id="recBtn" class="btn-danger" onclick="startRecording()" disabled>REC</button>
-            <button id="stopBtn" class="btn-neutral" onclick="stopRecording()" disabled>STOP</button>
-            <button id="playBtn" class="btn-success" onclick="startPlayback()" disabled>PLAY LOOP</button>
-        </div>
+    <h3>Steuerung</h3>
+    <div class="row">
+      <label>Empfindlichkeit (Schwelle)</label>
+      <input type="range" id="sens" min="5" max="80" step="1">
+      <span class="val" id="sensVal"></span>
     </div>
+    <div class="level"><div class="fill" id="lvlFill"></div><div class="mark" id="lvlMark"></div></div>
+    <div class="hint">Balken = aktuelle Bewegungsstärke (live, nur wenn verbunden). Roter Marker = Schwelle. Knapp <b>unter</b> die gewollte Bewegung legen, knapp <b>über</b> Tremor/Zappeln.</div>
+    <div class="row">
+      <label>Auto-Auswahl per Stillhalten (Dwell)</label>
+      <span class="switch"><input type="checkbox" id="dwellOn" checked><span class="sl"></span></span>
+    </div>
+    <div class="row">
+      <label>Dwell-Zeit</label>
+      <input type="range" id="dwellMs" min="800" max="6000" step="100" value="3000">
+      <span class="val" id="dwellVal"></span>
+    </div>
+    <div class="row">
+      <label>Entprellung nach Bewegung</label>
+      <input type="range" id="coolMs" min="0" max="2000" step="50" value="500">
+      <span class="val" id="coolVal"></span>
+    </div>
+
+    <h3>Anzeige</h3>
+        <div class="row">
+     <label>Kacheln pro Zeile</label>
+      <input type="range" id="perRow" min="1" max="5" step="1">
+      <span class="val" id="perRowVal"></span>
+    </div>
+        <div class="row">
+      <label>Kacheln untereinander statt nebeneinander</label>
+      <span class="switch"><input type="checkbox" id="vertical"><span class="sl"></span></span>
+    </div>
+    <div class="row">
+      <label>Inaktive Kacheln abdunkeln</label>
+      <span class="switch"><input type="checkbox" id="dim" checked><span class="sl"></span></span>
+    </div>
+    <div class="row">
+      <label>Ton bei Wechsel/Auswahl</label>
+      <span class="switch"><input type="checkbox" id="sound" checked><span class="sl"></span></span>
+    </div>
+
+    <h3>Sitzungs-Log</h3>
+    <div class="row">
+      <button class="btn" id="resetLog">Leeren</button>
+      <button class="btn" id="exportLog">Als CSV</button>
+      <span class="spacer"></span>
+      <span class="pill" id="counts"></span>
+    </div>
+    <div class="log" id="log"></div>
+
+    <h3>Test ohne Gerät</h3>
+    <div class="hint">Leertaste oder dieser Knopf = simulierte Bewegung. So testest du Ablauf & Timing ohne Xiao.</div>
+    <div class="row"><button class="btn" id="simBtn" style="flex:1">Test-Bewegung auslösen</button></div>
+  </div>
 </div>
 
 <script>
-    let intensityChar, controlChar, configChar;
-    let isDragging = false;
-    let isRecording = false;
+"use strict";
+/* ============================================================
+   Kachel-Schalter — Web-Bluetooth + Switch-Scanning
+   ============================================================ */
 
-    const SERVICE_UUID = '00001214-0000-1000-8000-00805f9b34fb';
-    const INTENSITY_UUID = '00001215-0000-1000-8000-00805f9b34fb';
-    const CONTROL_UUID = '00001216-0000-1000-8000-00805f9b34fb';
-    const CONFIG_UUID  = '00001217-0000-1000-8000-00805f9b34fb';
+const SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
+const CHAR_UUID    = "19b10001-e8f2-537e-4f6c-d104768a1214";
 
-    const dot = document.getElementById('dot');
-    const pad = document.getElementById('touchpad');
+const LS_TILES = "ks_tiles_v1";
+const LS_CFG   = "ks_cfg_v1";
 
-    async function connectBLE() {
+/* ---------- Zustand ---------- */
+let tiles = load(LS_TILES, [
+  { id: id(), label: "Ja",   emoji: "👍", img: null },
+  { id: id(), label: "Nein", emoji: "👎", img: null },
+]);
+let cfg = Object.assign({
+  dwellOn: true, dwellMs: 2500, coolMs: 500, sensitivity: 15, perRow: 2, // perRow hinzugefügt
+  vertical: false, dim: true, sound: true, targetId: null,
+}, load(LS_CFG, {}));
+
+let current = 0;
+let dispLevel = 0;               // angezeigter Live-Pegel (mit Decay)
+let lastMotionTs = 0;            // für Entprellung (App-Seite)
+let dwellTimer = null, dwellRAF = null, dwellStart = 0;
+let logEntries = [];
+let trialStart = null;           // Zeitstempel Trialbeginn
+let device = null, server = null, characteristic = null;
+let audio = null;
+let speaking = false;            // blockiert Eingaben während Audio-Wiedergabe
+let mediaRec = null, recChunks = [], recTileId = null, recTimer = null, recStream = null;
+const audioCache = {};           // tileId -> vorbereitetes Audio-Element (schneller Start)
+
+/* ---------- Hilfen ---------- */
+function id(){ return Math.random().toString(36).slice(2,9); }
+function load(k,def){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):def; }catch(e){ return def; } }
+function save(){ try{ localStorage.setItem(LS_TILES,JSON.stringify(tiles)); localStorage.setItem(LS_CFG,JSON.stringify(cfg)); return true; }catch(e){ return false; } }
+const $ = s => document.querySelector(s);
+function now(){ return Date.now(); }
+
+/* ---------- Audio (kurze Beeps, keine Dateien) ---------- */
+function beep(freq, ms){
+  if(!cfg.sound) return;
+  try{
+    audio = audio || new (window.AudioContext||window.webkitAudioContext)();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type="sine"; o.frequency.value=freq;
+    g.gain.value=0.0001; o.connect(g); g.connect(audio.destination);
+    const t=audio.currentTime;
+    g.gain.exponentialRampToValueAtTime(0.25,t+0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+ms/1000);
+    o.start(t); o.stop(t+ms/1000+0.02);
+  }catch(e){}
+}
+
+/* ============================================================
+   Rendern
+   ============================================================ */
+/* ============================================================
+   Rendern
+   ============================================================ */
+function renderStage(){
+  const stage = $("#stage");
+  stage.className = (cfg.vertical?"vertical ":"") + (cfg.dim?"dim":"");
+  
+  // Dynamisches CSS Grid anwenden
+  if (cfg.vertical) {
+    stage.style.display = "flex";
+  } else {
+    stage.style.display = "grid";
+    stage.style.gridTemplateColumns = `repeat(${cfg.perRow}, 1fr)`;
+    stage.style.gridAutoRows = "1fr"; // Hält alle Reihen gleich hoch
+  }
+
+  stage.innerHTML = "";
+  if(tiles.length===0) return;
+
+  // Alle Kacheln rendern
+  tiles.forEach((t, gi)=>{
+    const el = document.createElement("div");
+    el.className = "tile" + (gi===current?" active":"");
+    el.dataset.idx = gi;
+    const art = t.img ? `<img src="${t.img}" alt="">` : (t.emoji || "▦");
+    el.innerHTML = `
+      <svg class="ring" viewBox="0 0 54 54"><circle class="bg" cx="27" cy="27" r="24"/><circle class="fg" cx="27" cy="27" r="24" stroke-dasharray="150.8" stroke-dashoffset="150.8"/></svg>
+      <div class="art">${art}</div>
+      <div class="label">${escapeHtml(t.label||"")}</div>
+      <div class="check">✓</div>`;
+    el.addEventListener("click", ()=>{ setActive(gi, "tippen"); });
+    stage.appendChild(el);
+  });
+
+  updateRing(0);
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+/* ---------- aktive Kachel setzen ---------- */
+function setActive(i, reason){
+  if(tiles.length===0) return;
+  current = ((i % tiles.length) + tiles.length) % tiles.length;
+  renderStage();                                // zeichnet die richtige Seite + Highlight
+  startDwell();
+}
+
+/* ---------- ein Bewegungs-Event ---------- */
+function onMotion(reason){
+  if(speaking) return;                          // während Audio-Feedback keine Eingaben
+  const t = now();
+  if(t - lastMotionTs < cfg.coolMs) return;     // App-seitige Entprellung
+  lastMotionTs = t;
+  beep(660, 70);
+  const next = (current + 1) % tiles.length;
+  log("switch", tiles[current]?.label, {to: tiles[next]?.label, src:reason});
+  setActive(next, reason);
+}
+
+/* ---------- Dwell-Auswahl ---------- */
+function startDwell(){
+  clearDwell();
+  const ring = document.querySelector(".tile.active .ring");
+  if(!cfg.dwellOn){ if(ring) ring.classList.add("off"); return; }
+  if(ring) ring.classList.remove("off");
+  dwellStart = performance.now();
+  const fg = document.querySelector(".tile.active .ring .fg");
+  const C = 150.8;
+  const tick = ()=>{
+    const p = Math.min(1,(performance.now()-dwellStart)/cfg.dwellMs);
+    if(fg) fg.style.strokeDashoffset = String(C*(1-p));
+    if(p<1) dwellRAF = requestAnimationFrame(tick);
+  };
+  dwellRAF = requestAnimationFrame(tick);
+  dwellTimer = setTimeout(select, cfg.dwellMs);
+}
+function clearDwell(){
+  if(dwellTimer) clearTimeout(dwellTimer);
+  if(dwellRAF) cancelAnimationFrame(dwellRAF);
+  dwellTimer = dwellRAF = null;
+}
+function updateRing(){ const fg=document.querySelector(".tile.active .ring .fg"); if(fg) fg.style.strokeDashoffset="150.8"; }
+
+function select(){
+  clearDwell();
+  const chosen = tiles[current];
+  speaking = true;                       // sperrt Eingaben bis die Bestätigung durch ist
+
+  const confirm = ()=>{
+    if(!speaking) return;
+    speaking = false;
+    const el = document.querySelector(".tile.active");
+    if(el) el.classList.add("selected");  // Häkchen ZULETZT
+    finalizeSelect(chosen);               // dann erst loggen
+  };
+
+  if(chosen && chosen.audio){
+    const a = getTileAudioEl(chosen) || new Audio(chosen.audio);  // erst die Aufnahme...
+    try{ a.currentTime = 0; }catch(e){}
+    a.onended = confirm;
+    a.onerror = confirm;
+    const p = a.play();
+    if(p && p.catch) p.catch(confirm);
+  } else {
+    beep(880,140); setTimeout(()=>beep(1175,160),120);  // ...oder Bestätigungstöne
+    setTimeout(confirm, 320);             // ...DANN das Häkchen
+  }
+}
+function finalizeSelect(chosen){
+  let correct = null;
+  let ms = null;
+  if(cfg.targetId){
+    correct = (chosen && chosen.id===cfg.targetId);
+    if(trialStart) ms = now()-trialStart;
+    trialStart = now(); // nächster Trial startet
+  }
+  log("select", chosen?.label, {correct, ms});
+}
+
+/* ============================================================
+   Web Bluetooth
+   ============================================================ */
+async function connect(){
+  if(!navigator.bluetooth){
+    setStatus("Web-Bluetooth fehlt – Chrome/Edge nutzen (kein Safari/Firefox).", false);
+    alert("Dieser Browser kann kein Web-Bluetooth.\n\nFunktioniert mit:\n• Chrome / Edge (PC, Android)\n• iPad/iPhone nur mit der App „Bluefy“\n\nNicht: Safari, Firefox.");
+    return;
+  }
+  try{
+    setStatus("Suche Gerät…", false);
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "Xiao" }, { services:[SERVICE_UUID] }],
+      optionalServices: [SERVICE_UUID],
+    });
+    device.addEventListener("gattserverdisconnected", onDisconnect);
+    await connectGatt();
+  }catch(e){
+    setStatus("Abgebrochen: "+(e.message||e), false);
+  }
+}
+async function connectGatt(){
+  setStatus("Verbinde…", false);
+  server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(SERVICE_UUID);
+  characteristic = await svc.getCharacteristic(CHAR_UUID);
+  await characteristic.startNotifications();
+  characteristic.addEventListener("characteristicvaluechanged", onNotify);
+  setStatus("Verbunden: "+(device.name||"XiaoSwitch"), true);
+  beep(523,120);
+}
+function onNotify(ev){
+  const v = ev.target.value.getUint8(0);    // Bewegungsstärke (g*100, 0..255)
+  feedLevel(v);                             // Live-Pegel im Trainer-Menü
+  if(v >= cfg.sensitivity) onMotion("ble"); // Schwelle in der App; onMotion entprellt selbst
+}
+function onDisconnect(){
+  setStatus("Verbindung getrennt – versuche erneut…", false);
+  let tries=0;
+  const retry=async()=>{
+    if(!device) return;
+    try{ await connectGatt(); }
+    catch(e){ if(tries++<6) setTimeout(retry,1500); else setStatus("Getrennt. „Verbinden“ erneut drücken.", false); }
+  };
+  setTimeout(retry, 1200);
+}
+function setStatus(txt, ok){
+  $("#status").textContent = txt;
+  $("#dot").classList.toggle("on", !!ok);
+}
+
+/* ============================================================
+   Log
+   ============================================================ */
+function log(type, tile, extra){
+  const e = { ts: now(), type, tile: tile||"", ...(extra||{}) };
+  logEntries.push(e);
+  renderLog();
+}
+function renderLog(){
+  const lines = logEntries.slice(-200).map(e=>{
+    const ts = new Date(e.ts).toLocaleTimeString("de-DE");
+    if(e.type==="select"){
+      let tag = e.correct===true?" ✓richtig":e.correct===false?" ✗falsch":"";
+      let t = e.ms!=null?`  ${(e.ms/1000).toFixed(1)}s`:"";
+      return `${ts}  AUSWAHL  „${e.tile}“${tag}${t}`;
+    }
+    if(e.type==="switch") return `${ts}  wechsel   → „${e.to||""}“`;
+    if(e.type==="motion") return `${ts}  bewegung  (${e.tile})`;
+    return `${ts}  ${e.type}`;
+  });
+  $("#log").textContent = lines.join("\n");
+  $("#log").scrollTop = 1e9;
+  const sel = logEntries.filter(e=>e.type==="select");
+  const ok = sel.filter(e=>e.correct===true).length;
+  const bad = sel.filter(e=>e.correct===false).length;
+  $("#counts").textContent = sel.length ? `${ok}✓ / ${bad}✗ von ${sel.length}` : `${logEntries.length} Ereignisse`;
+}
+function exportCsv(){
+  const head = "zeit;typ;kachel;ziel;richtig;ms\n";
+  const rows = logEntries.map(e=>[
+    new Date(e.ts).toISOString(), e.type, e.tile||"", e.to||"",
+    e.correct==null?"":e.correct?"1":"0", e.ms!=null?e.ms:""
+  ].join(";")).join("\n");
+  const blob = new Blob([head+rows],{type:"text/csv"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "sitzung_"+new Date().toISOString().slice(0,19).replace(/[:T]/g,"-")+".csv";
+  a.click();
+}
+
+/* ============================================================
+   Trainer-Panel: Kacheln verwalten
+   ============================================================ */
+function renderTileList(){
+  const box = $("#tileList"); box.innerHTML="";
+  tiles.forEach((t,i)=>{
+    const card = document.createElement("div");
+    card.className="tilecard";
+    const isTarget = cfg.targetId===t.id;
+    card.innerHTML = `
+      <div class="thumb">${t.img?`<img src="${t.img}">`:(t.emoji||"▦")}</div>
+      <div class="name">${escapeHtml(t.label||"(ohne Name)")}</div>
+      ${isTarget?'<span class="target">ZIEL</span>':''}
+      <button class="mini ${t.id===recTileId?'rec':''} ${t.audio?'has':''}" title="${t.id===recTileId?'Aufnahme stoppen':(t.audio?'Audio neu aufnehmen':'Audio aufnehmen')}" data-act="rec">${t.id===recTileId?'⏹':'🎤'}</button>
+      ${t.audio?'<button class="mini" title="Audio vorhören" data-act="play">▶</button>':''}
+      <button class="mini" title="Als Ziel" data-act="target">★</button>
+      <button class="mini" title="Hoch"     data-act="up">↑</button>
+      <button class="mini" title="Runter"   data-act="down">↓</button>
+      <button class="mini" title="Löschen"  data-act="del">🗑</button>`;
+    card.querySelectorAll(".mini").forEach(b=>{
+      b.onclick = ()=>tileAction(i, b.dataset.act);
+    });
+    box.appendChild(card);
+  });
+}
+function tileAction(i, act){
+  if(act==="rec"){ toggleRecord(i); return; }
+  if(act==="play"){ playAudio(i); return; }
+  if(act==="del"){ tiles.splice(i,1); if(current>=tiles.length) current=0; }
+  if(act==="up"   && i>0){ [tiles[i-1],tiles[i]]=[tiles[i],tiles[i-1]]; }
+  if(act==="down" && i<tiles.length-1){ [tiles[i+1],tiles[i]]=[tiles[i],tiles[i+1]]; }
+  if(act==="target"){ cfg.targetId = (cfg.targetId===tiles[i].id)?null:tiles[i].id; trialStart=now(); }
+  save(); renderTileList(); renderStage(); updateTrialPill();
+}
+
+/* ---------- Audio pro Kachel: aufnehmen / vorhören ---------- */
+function playAudio(i){ const t=tiles[i]; if(t&&t.audio){ try{ new Audio(t.audio).play(); }catch(e){} } }
+
+function toggleRecord(i){
+  if(recTileId!==null){ stopRecord(); return; }   // läuft schon -> stoppen
+  startRecord(i);
+}
+async function startRecord(i){
+  const t = tiles[i]; if(!t) return;
+  try{
+    recStream = await navigator.mediaDevices.getUserMedia({ audio:true });
+  }catch(e){
+    alert("Kein Mikrofon-Zugriff.\nÜber https oder localhost öffnen und Zugriff erlauben.");
+    return;
+  }
+  recChunks = [];
+  try{ mediaRec = new MediaRecorder(recStream, { mimeType:"audio/webm" }); }
+  catch(e){ mediaRec = new MediaRecorder(recStream); }
+  recTileId = t.id;
+  mediaRec.ondataavailable = e=>{ if(e.data && e.data.size) recChunks.push(e.data); };
+  mediaRec.onstop = ()=>{
+    const blob = new Blob(recChunks, { type: (mediaRec && mediaRec.mimeType) || "audio/webm" });
+    const fr = new FileReader();
+    fr.onload = ()=>{
+      const idx = tiles.findIndex(x=>x.id===recTileId);
+      if(idx>=0){
+        tiles[idx].audio = fr.result;
+        if(!save()){ tiles[idx].audio = null; save();
+          alert("Speicher voll – Aufnahme zu groß oder zu viele Medien.\nKürzer aufnehmen oder ein Bild/Audio entfernen."); }
+      }
+      cleanupRec(); renderTileList(); warmAudioCache();
+    };
+    fr.readAsDataURL(blob);
+  };
+  mediaRec.start();
+  renderTileList();                          // Knopf zeigt jetzt ⏹
+  recTimer = setTimeout(stopRecord, 8000);   // Sicherheits-Limit 8 s
+}
+function stopRecord(){
+  if(recTimer){ clearTimeout(recTimer); recTimer=null; }
+  try{ if(mediaRec && mediaRec.state!=="inactive") mediaRec.stop(); }catch(e){}
+}
+function cleanupRec(){
+  if(recStream){ recStream.getTracks().forEach(tr=>tr.stop()); recStream=null; }
+  mediaRec=null; recTileId=null; recChunks=[];
+}
+
+/* ---------- Audio vorbereiten: dataURL -> Blob-URL, vorgeladen ---------- */
+function dataURLtoBlob(d){
+  const i = d.indexOf(",");
+  const mime = (d.slice(0,i).match(/data:([^;]+)/) || [])[1] || "audio/webm";
+  const bin = atob(d.slice(i+1));
+  const arr = new Uint8Array(bin.length);
+  for(let k=0;k<bin.length;k++) arr[k]=bin.charCodeAt(k);
+  return new Blob([arr], { type: mime });
+}
+function getTileAudioEl(t){
+  if(!t || !t.audio) return null;
+  const c = audioCache[t.id];
+  if(c && c.src===t.audio) return c.el;          // schon vorbereitet
+  if(c && c.url){ try{ URL.revokeObjectURL(c.url); }catch(e){} }
+  let url=null, el;
+  try{
+    url = URL.createObjectURL(dataURLtoBlob(t.audio));
+    el = new Audio(url); el.preload="auto"; el.load();
+  }catch(e){ el = new Audio(t.audio); url=null; }
+  audioCache[t.id] = { src:t.audio, el, url };
+  return el;
+}
+function warmAudioCache(){ tiles.forEach(t=>{ if(t.audio) getTileAudioEl(t); }); }
+function updateTrialPill(){
+  const t = tiles.find(x=>x.id===cfg.targetId);
+  const pill = $("#trialPill");
+  if(t){ pill.textContent = "Ziel: "+(t.label||"?"); pill.className="pill ok"; }
+  else { pill.textContent = "Kein Ziel gesetzt"; pill.className="pill"; }
+}
+
+/* Bild laden + verkleinern (klein halten für localStorage) */
+let pendingImg = null;
+$("#pickImg").onclick = ()=>$("#fileInput").click();
+$("#fileInput").onchange = e=>{
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = ()=>{
+    const im = new Image();
+    im.onload = ()=>{
+      const max=512, sc=Math.min(1,max/Math.max(im.width,im.height));
+      const c=document.createElement("canvas");
+      c.width=Math.round(im.width*sc); c.height=Math.round(im.height*sc);
+      c.getContext("2d").drawImage(im,0,0,c.width,c.height);
+      pendingImg = c.toDataURL("image/jpeg",0.85);
+      $("#addHint").textContent = "Bild bereit ("+Math.round(pendingImg.length/1024)+" KB). Jetzt „Kachel hinzufügen“.";
+    };
+    im.src = r.result;
+  };
+  r.readAsDataURL(f);
+};
+$("#addTile").onclick = ()=>{
+  const label = $("#newLabel").value.trim();
+  const emoji = $("#newEmoji").value.trim();
+  if(!label && !emoji && !pendingImg){ $("#addHint").textContent="Bitte Beschriftung, Emoji oder Bild angeben."; return; }
+  tiles.push({ id:id(), label, emoji: emoji||null, img: pendingImg });
+  pendingImg=null;
+  $("#newLabel").value=""; $("#newEmoji").value=""; $("#fileInput").value=""; $("#addHint").textContent="";
+  save(); renderTileList(); renderStage();
+};
+
+/* ============================================================
+   Einstellungen verkabeln
+   ============================================================ */
+function bindToggle(idStr,key,after){ const el=$(idStr); el.checked=cfg[key]; el.onchange=()=>{cfg[key]=el.checked; save(); after&&after();}; }
+
+// NEU: bindRange um den Parameter 'after' erweitert
+function bindRange(idStr,valStr,key,suffix,after){ 
+  const el=$(idStr),v=$(valStr); el.value=cfg[key];
+  const upd=()=>{ v.textContent=cfg[key]+suffix; }; upd();
+  el.oninput=()=>{ cfg[key]=+el.value; upd(); save(); after&&after(); }; 
+}
+
+bindToggle("#dwellOn","dwellOn", ()=>startDwell());
+bindToggle("#vertical","vertical", renderStage);
+bindToggle("#dim","dim", renderStage);
+bindToggle("#sound","sound");
+// Füge diese Zeile zu den anderen bind-Aufrufen hinzu:
+bindRange("#perRow","#perRowVal","perRow","x", renderStage);
+
+bindRange("#dwellMs","#dwellVal","dwellMs"," ms");
+bindRange("#coolMs","#coolVal","coolMs"," ms");
+/* Empfindlichkeit + Live-Pegel */
+const sensEl=$("#sens"), sensV=$("#sensVal"), lvlMark=$("#lvlMark"), lvlFill=$("#lvlFill");
+function positionMark(){ if(lvlMark) lvlMark.style.left = Math.min(100,cfg.sensitivity)+"%"; }
+function updSens(){ sensV.textContent=(cfg.sensitivity/100).toFixed(2)+" g"; positionMark(); }
+sensEl.value=cfg.sensitivity; updSens();
+sensEl.oninput=()=>{ cfg.sensitivity=+sensEl.value; updSens(); save(); };
+function feedLevel(v){ dispLevel = Math.max(dispLevel, Math.min(100, v)); }
+setInterval(()=>{ dispLevel*=0.82; if(lvlFill) lvlFill.style.width=dispLevel.toFixed(0)+"%"; }, 60);
+
+$("#clearTarget").onclick=()=>{ cfg.targetId=null; save(); renderTileList(); updateTrialPill(); };
+$("#resetLog").onclick=()=>{ logEntries=[]; renderLog(); };
+$("#exportLog").onclick=exportCsv;
+$("#simBtn").onclick=()=>{ feedLevel(60); onMotion("test"); };
+
+/* ---------- Panel öffnen/schließen ---------- */
+$("#gearBtn").onclick=()=>{ $("#overlay").classList.add("show"); renderTileList(); updateTrialPill(); };
+$("#closePanel").onclick=()=>$("#overlay").classList.remove("show");
+$("#overlay").onclick=()=>$("#overlay").classList.remove("show");
+$("#connectBtn").onclick=connect;
+$("#fsBtn").onclick=()=>{ if(!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.(); };
+
+/* Leertaste = Test-Bewegung (nur außerhalb von Textfeldern) */
+window.addEventListener("keydown",e=>{
+  if(e.code==="Space" && !/input|textarea/i.test(e.target.tagName)){ e.preventDefault(); feedLevel(60); onMotion("taste"); }
+});
+/* ============================================================
+   ARASAAC API Integration
+   ============================================================ */
+$("#btnArasaac").onclick = async () => {
+  const q = $("#arasaacSearch").value.trim();
+  if(!q) return;
+  
+  const resDiv = $("#arasaacResults");
+  resDiv.innerHTML = "<span class='hint'>Sucht...</span>";
+  
+  try {
+    // 1. Suche nach dem Begriff auf Deutsch
+    const resp = await fetch(`https://api.arasaac.org/api/pictograms/de/search/${encodeURIComponent(q)}`);
+    const data = await resp.json();
+    
+    if(!data || data.length === 0) { 
+      resDiv.innerHTML = "<span class='hint'>Kein Piktogramm gefunden.</span>"; 
+      return; 
+    }
+
+    resDiv.innerHTML = "";
+    
+    // 2. Zeige die ersten 10 Treffer als klickbare Bilder an
+    data.slice(0, 10).forEach(pic => {
+      // 300px Auflösung ist ideal für die Kacheln
+      const imgUrl = `https://static.arasaac.org/pictograms/${pic._id}/${pic._id}_300.png`;
+      const imgEl = document.createElement("img");
+      
+      imgEl.src = imgUrl;
+      imgEl.style.cssText = "height:54px; width:54px; object-fit:contain; cursor:pointer; background:#fff; border-radius:8px; border:2px solid transparent;";
+      imgEl.title = pic.keywords.map(k => k.keyword).join(", "); // Zeigt beim Hovern alternative Bedeutungen
+      
+      // 3. Beim Klick: Bild herunterladen und für Offline-Nutzung in Base64 umwandeln
+      imgEl.onclick = async () => {
+        $("#addHint").textContent = "Lade Symbol herunter...";
+        resDiv.querySelectorAll("img").forEach(i => i.style.borderColor = "transparent");
+        imgEl.style.borderColor = "var(--accent)"; // Visuelles Feedback
+        
         try {
-            const device = await navigator.bluetooth.requestDevice({
-                acceptAllDevices: true,
-                optionalServices: [SERVICE_UUID]
-            });
-            const server = await device.gatt.connect();
-            const service = await server.getPrimaryService(SERVICE_UUID);
-
-            intensityChar = await service.getCharacteristic(INTENSITY_UUID);
-            controlChar = await service.getCharacteristic(CONTROL_UUID);
-            configChar = await service.getCharacteristic(CONFIG_UUID);
-
-            document.getElementById('status').innerText = "Connected: Limbic ✓";
-            document.getElementById('connectBtn').style.display = 'none';
-            
-            // HIER werden die Buttons aktiviert
-            document.getElementById('syncBtn').disabled = false;
-            document.getElementById('recBtn').disabled = false;
-            
-        } catch (e) {
-            document.getElementById('status').innerText = "Fehler: " + e.message;
+          const imgResp = await fetch(imgUrl);
+          const blob = await imgResp.blob();
+          const reader = new FileReader();
+          reader.onload = () => {
+            pendingImg = reader.result; // Speichert das Base64-Bild in deiner bestehenden Variable
+            // Übernehme das erste Keyword direkt als Vorschlag für die Kachel-Beschriftung
+            if(!$("#newLabel").value) $("#newLabel").value = pic.keywords[0]?.keyword || q;
+            $("#addHint").textContent = "Piktogramm geladen! Jetzt 'Kachel hinzufügen' klicken.";
+          };
+          reader.readAsDataURL(blob);
+        } catch(e) {
+          $("#addHint").textContent = "Fehler beim Herunterladen des Bildes.";
         }
-    }
-
-    async function syncSettings() {
-        if (!configChar) return;
-        let mask = 0;
-        if (document.getElementById('m0').checked) mask |= (1 << 0);
-        if (document.getElementById('m1').checked) mask |= (1 << 1);
-        if (document.getElementById('m2').checked) mask |= (1 << 2);
-        mask |= (1 << 3); // Gelb bleibt immer an
-
-        await configChar.writeValue(new Uint8Array([mask]));
-        document.getElementById('status').innerText = "Modi synchronisiert! ✓";
-    }
-
-    // --- TOUCHPAD LOGIK ---
-    pad.addEventListener('pointerdown', (e) => {
-        if (!intensityChar) return;
-        isDragging = true;
-        pad.setPointerCapture(e.pointerId);
-        updatePosition(e);
+      };
+      
+      resDiv.appendChild(imgEl);
     });
+  } catch(e) {
+    resDiv.innerHTML = "<span class='hint' style='color:var(--bad)'>Netzwerkfehler bei der Suche.</span>";
+  }
+};
 
-    window.addEventListener('pointermove', (e) => {
-        if (isDragging) updatePosition(e);
-    });
-
-    window.addEventListener('pointerup', () => {
-        isDragging = false;
-        if (intensityChar) intensityChar.writeValueWithoutResponse(new Uint8Array([0]));
-        dot.style.left = '108px'; dot.style.top = '108px'; // Zurück zur Mitte
-    });
-
-    let lastSent = 0;
-    function updatePosition(e) {
-        const now = Date.now();
-        if (now - lastSent < 40) return; // 25Hz Limit
-        lastSent = now;
-
-        const rect = pad.getBoundingClientRect();
-        let x = e.clientX - rect.left - 130;
-        let y = e.clientY - rect.top - 130;
-
-        const maxR = 100;
-        const dist = Math.sqrt(x*x + y*y);
-        if (dist > maxR) { x *= maxR/dist; y *= maxR/dist; }
-
-        dot.style.left = (x + 108) + 'px';
-        dot.style.top = (y + 108) + 'px';
-
-        const val = Math.min(127, Math.floor((dist/maxR) * 127));
-        intensityChar.writeValueWithoutResponse(new Uint8Array([val]));
-    }
-
-    // --- LOOPER BEFEHLE ---
-    async function startRecording() {
-        await controlChar.writeValue(new Uint8Array([1]));
-        document.getElementById('status').innerText = "🔴 Aufnahme läuft...";
-        document.getElementById('stopBtn').disabled = false;
-    }
-
-    async function stopRecording() {
-        await controlChar.writeValue(new Uint8Array([2]));
-        document.getElementById('status').innerText = "Loop gespeichert & aktiv";
-        document.getElementById('playBtn').disabled = false;
-    }
-
-    async function startPlayback() {
-        await controlChar.writeValue(new Uint8Array([2]));
-        document.getElementById('status').innerText = "▶️ Loop aktiv";
-    }
+// Optional: Suche auch mit der Enter-Taste auslösen
+$("#arasaacSearch").addEventListener("keypress", (e) => {
+  if (e.key === "Enter") $("#btnArasaac").click();
+});
+/* ============================================================
+   Start
+   ============================================================ */
+renderStage();
+renderLog();
+updateTrialPill();
+setActive(0,"start");
 </script>
 </body>
 </html>

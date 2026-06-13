@@ -354,6 +354,26 @@
   </div>
 </div>
 
+<!--
+  ============================================================
+  ERWEITERTES START-PROFIL (Seed)
+  ------------------------------------------------------------
+  Wird NUR beim allerersten Start geladen (wenn der Speicher
+  des Geräts noch leer ist). Danach gilt der lokal gespeicherte
+  Stand und dieser Block wird ignoriert.
+
+  So befüllst du es:
+   1. In der App den gewünschten Stand aufbauen.
+   2. Im Trainer-Menü "Aktuellen Stand exportieren" -> JSON-Datei.
+   3. Den KOMPLETTEN Inhalt dieser Datei in den JSON-Block
+      unten kopieren (das leere {} ersetzen).
+  Leer lassen ({}) = es starten die eingebauten Standard-Kacheln.
+  ============================================================
+-->
+<script type="application/json" id="seedProfile">
+{}
+</script>
+
 <script>
 "use strict";
 
@@ -367,7 +387,20 @@ const LS_WORDS = "ks_words_v1";
 function id(){ return Math.random().toString(36).slice(2,9); }
 function load(k,def){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):def; }catch(e){ return def; } }
 
-let tiles = load(LS_TILES, [
+// Erweitertes Start-Profil aus dem #seedProfile-Block lesen.
+// Gilt nur als Vorbelegung, wenn der Geräte-Speicher noch leer ist.
+function readSeed(){
+  try{
+    const el = document.getElementById("seedProfile");
+    const txt = el ? el.textContent.trim() : "";
+    if(!txt) return null;
+    const obj = JSON.parse(txt);
+    return (obj && obj.tiles) ? obj : null;   // nur gültig, wenn es Kacheln enthält
+  }catch(e){ console.warn("Seed-Profil ungültig, nutze Standard:", e); return null; }
+}
+const SEED = readSeed();
+
+let tiles = load(LS_TILES, (SEED && SEED.tiles) ? SEED.tiles : [
   { id: id(), label: "Ja", type: "action", emoji: null, img: "https://static.arasaac.org/pictograms/5584/5584_300.png" },
   { id: id(), label: "Nein", type: "action", emoji: null, img: "https://static.arasaac.org/pictograms/5526/5526_300.png" },
   { id: id(), label: "Bett", type: "folder", emoji: "🛏️", img: null, subTiles: [
@@ -436,12 +469,12 @@ const DEFAULT_WORDS = [
     { id:id(), type:"action", label:"Toilette", emoji:null, img:null },
   ]},
 ];
-let wordBank = load(LS_WORDS, DEFAULT_WORDS);
+let wordBank = load(LS_WORDS, (SEED && SEED.words) ? SEED.words : DEFAULT_WORDS);
 
 let cfg = Object.assign({
   dwellOn: true, dwellMs: 2500, coolMs: 500, sensitivity: 15, perRow: 2, 
   vertical: false, dim: true, sound: true, speak: true, scanMs: 1500, targetId: null,
-}, load(LS_CFG, {}));
+}, (SEED && SEED.cfg) ? SEED.cfg : {}, load(LS_CFG, {}));
 
 let currentFolderObj = null; 
 let navStack = [];           
@@ -981,7 +1014,7 @@ $("#addTile").onclick = ()=>{
    Profile Export / Import
    ============================================================ */
 $("#exportProfileBtn").onclick = () => {
-  const data = JSON.stringify({ tiles: tiles, cfg: cfg });
+  const data = JSON.stringify({ tiles: tiles, cfg: cfg, words: wordBank });
   const blob = new Blob([data], {type: "application/json"});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1003,6 +1036,7 @@ $("#importProfileInput").onchange = (e) => {
       if(data.tiles && data.cfg) {
         tiles = data.tiles;
         cfg = Object.assign(cfg, data.cfg); 
+        if(data.words) wordBank = data.words;
         save();
         
         // Navigation nach dem Import komplett zurücksetzen
@@ -1053,6 +1087,7 @@ function ladeFesteVorlage(profilDaten) {
     if(profilDaten.tiles && profilDaten.cfg) {
       tiles = profilDaten.tiles;
       cfg = Object.assign(cfg, profilDaten.cfg); 
+      if(profilDaten.words) wordBank = profilDaten.words;
       save();
       
       // Navigation nach dem Import komplett auf Start zurücksetzen

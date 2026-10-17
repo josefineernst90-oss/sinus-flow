@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Herzschlag & Atmung</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --line:#2a3340; --txt:#e6edf3; --muted:#8b97a7;
+    --accent:#ffcc33; --accent-soft:#3a3110; --warm:#ff7a3d;
+    --air:#5cc8ff; --air-soft:#10303f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; min-height:100%; }
+  body {
+    background: var(--bg); color: var(--txt);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; align-items: center; min-height: 100vh;
+  }
+  header {
+    width: 100%; max-width: 560px; padding: 16px 16px 0;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 650; flex: 1; }
+  .btn {
+    font: inherit; cursor: pointer; background: var(--panel); color: var(--txt);
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 14px;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #1a1500; border-color: var(--accent); font-weight: 650; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  .status { width: 100%; max-width: 560px; padding: 8px 16px 0; color: var(--muted); font-size: 14px; min-height: 1.9em; }
+  .status.ok { color: #6ee7a0; }
+  .status.warn { color: var(--accent); }
+
+  main { width: 100%; max-width: 560px; padding: 8px 16px 32px; display: flex; flex-direction: column; align-items: center; }
+
+  .stage { width: 100%; display: grid; place-items: center; padding: 36px 0 28px; }
+  .stage.small { padding: 20px 0 22px; }
+
+  /* ---- Herz-Kugel ---- */
+  .orb {
+    --v: 0; --s: .6;
+    width: min(62vw, 260px); aspect-ratio: 1; border-radius: 50%; border: 0; cursor: pointer;
+    color: #1d1200; font: inherit; display: grid; place-content: center; text-align: center;
+    background: radial-gradient(circle at 36% 30%, #ffe9a8 0%, var(--accent) 38%, #e0651f 78%, #8f2f0c 100%);
+    transform: scale(calc(1 + .20 * var(--v) * (.35 + .65 * var(--s))));
+    box-shadow:
+      0 0 0 calc(10px * var(--v)) rgba(255,204,51,calc(.10 + .20 * var(--v))),
+      0 0 calc(30px + 90px * var(--v)) rgba(255,122,61,calc(.18 + .50 * var(--v)));
+    filter: saturate(.55) brightness(.62);
+    transition: filter .5s;
+  }
+  .orb[aria-pressed="true"] { filter: none; }
+  .orb .num { font-size: clamp(40px, 11vw, 64px); font-weight: 700; line-height: 1; }
+  .orb .unit { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; opacity: .75; }
+  .orb .go { font-size: 22px; font-weight: 650; }
+
+  /* ---- Atem-Kugel ---- */
+  .lung {
+    --b: 0; --s: .6;
+    width: min(44vw, 170px); aspect-ratio: 1; border-radius: 50%; border: 0; cursor: pointer;
+    color: #04202e; font: inherit; display: grid; place-content: center; text-align: center;
+    background: radial-gradient(circle at 36% 30%, #d6f2ff 0%, var(--air) 40%, #2a86c9 78%, #0f3f66 100%);
+    transform: scale(calc(.82 + .38 * var(--b) * (.35 + .65 * var(--s))));
+    box-shadow:
+      0 0 0 calc(8px * var(--b)) rgba(92,200,255,calc(.08 + .18 * var(--b))),
+      0 0 calc(20px + 70px * var(--b)) rgba(92,200,255,calc(.10 + .35 * var(--b)));
+    filter: saturate(.55) brightness(.62);
+    transition: filter .5s;
+  }
+  .lung[aria-pressed="true"] { filter: none; }
+  .lung .num { font-size: clamp(30px, 8vw, 44px); font-weight: 700; line-height: 1; }
+  .lung .unit { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; opacity: .75; }
+  .lung .go { font-size: 18px; font-weight: 650; }
+
+  .panel { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 18px; }
+  .panel + .panel { margin-top: 0; }
+  .panel h2 { margin: 0; font-size: 14px; font-weight: 650; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+  .row label { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; color: var(--muted); margin-bottom: 6px; }
+  .row label output { color: var(--txt); font-weight: 650; font-size: 16px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
+  .panel.air input[type=range] { accent-color: var(--air); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { font: inherit; cursor: pointer; background: transparent; color: var(--txt); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; }
+  .chip:hover, .chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+  .panel.air .chip:hover, .panel.air .chip[aria-pressed="true"] { border-color: var(--air); background: var(--air-soft); }
+  .hint { color: var(--muted); font-size: 13px; width: 100%; margin-top: 14px; }
+  @media (prefers-reduced-motion: reduce) { .orb, .lung { transition: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Herzschlag & Atmung</h1>
+  <button class="btn primary" id="connect" type="button">Mit Biene verbinden</button>
+</header>
+<div class="status" id="status" role="status" aria-live="polite">Nicht verbunden. Du siehst nur die Vorschau.</div>
+
+<main>
+  <!-- Herzschlag -->
+  <div class="stage">
+    <button class="orb" id="orb" type="button" aria-pressed="false" aria-label="Herzschlag starten oder stoppen">
+      <span class="go" id="go">Start</span>
+      <span class="num" id="num" hidden>60</span>
+      <span class="unit" id="unit" hidden>bpm</span>
+    </button>
+  </div>
+
+  <section class="panel" aria-label="Einstellungen Herzschlag">
+    <h2>Herzschlag</h2>
+    <div class="row">
+      <label for="bpm">Puls <output id="bpmOut">60 bpm</output></label>
+      <input id="bpm" type="range" min="30" max="150" step="1" value="60">
+    </div>
+    <div class="row">
+      <label for="str">Stärke <output id="strOut">60 %</output></label>
+      <input id="str" type="range" min="10" max="100" step="1" value="60">
+    </div>
+    <div class="chips" role="group" aria-label="Vorgaben Puls">
+      <button class="chip" type="button" data-bpm="60">Ruhe 60</button>
+      <button class="chip" type="button" data-bpm="75">Alltag 75</button>
+      <button class="chip" type="button" data-bpm="100">Aufgeregt 100</button>
+      <button class="chip" type="button" data-bpm="130">Sprint 130</button>
+    </div>
+  </section>
+
+  <!-- Atmung -->
+  <div class="stage small">
+    <button class="lung" id="lung" type="button" aria-pressed="false" aria-label="Atmung starten oder stoppen">
+      <span class="go" id="bGo">Atem</span>
+      <span class="num" id="bNum" hidden>12</span>
+      <span class="unit" id="bUnit" hidden>pro min</span>
+    </button>
+  </div>
+
+  <section class="panel air" aria-label="Einstellungen Atmung">
+    <h2>Atmung</h2>
+    <div class="row">
+      <label for="rate">Atemfrequenz <output id="rateOut">12 / min</output></label>
+      <input id="rate" type="range" min="4" max="30" step="1" value="12">
+    </div>
+    <div class="row">
+      <label for="bstr">Stärke <output id="bstrOut">70 %</output></label>
+      <input id="bstr" type="range" min="10" max="100" step="1" value="70">
+    </div>
+    <div class="chips" role="group" aria-label="Vorgaben Atmung">
+      <button class="chip" type="button" data-rate="6">Tief 6</button>
+      <button class="chip" type="button" data-rate="12">Ruhe 12</button>
+      <button class="chip" type="button" data-rate="18">Aktiv 18</button>
+      <button class="chip" type="button" data-rate="26">Keuchen 26</button>
+    </div>
+  </section>
+
+  <div class="hint">Tippe die Kugeln zum Starten und Stoppen. Herzschlag und Atmung laufen unabhängig voneinander und können gleichzeitig an sein, die Biene legt beides übereinander. Die Kugeln zeigen den Rhythmus so, wie ihn die Biene fühlbar macht. Regler wirken sofort. Funktioniert in Chrome oder Edge.</div>
+</main>
+
+<script>
+// ---- Gleiche Daten wie in der Firmware ----
+const SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
+const HEART_UUID   = "19b10003-e8f2-537e-4f6c-d104768a1214";   // [BPM, Stärke 0..255, An 0/1]
+const BREATH_UUID  = "19b10004-e8f2-537e-4f6c-d104768a1214";   // [Atemzüge/min, Stärke 0..255, An 0/1]
+const S1_MS = 130, S2_MS = 100, S2_FAKTOR = 0.65;
+const ATEM_EINATMEN_ANTEIL = 0.40;
+
+const $ = (id) => document.getElementById(id);
+const orb = $('orb'), lung = $('lung'), connectBtn = $('connect'), statusEl = $('status');
+
+let on = false, bpm = 60, strength = 60;               // Herz, Stärke in Prozent
+let bOn = false, rate = 12, bStrength = 70;            // Atem, Stärke in Prozent
+let device = null, heartChar = null, breathChar = null;
+
+function setStatus(text, kind) { statusEl.textContent = text; statusEl.className = 'status' + (kind ? ' ' + kind : ''); }
+
+// ---- Herzschlag-Kurve (gleich wie auf der Biene) ----
+function pulseEnv(t, dur) {
+  if (t < 0 || t >= dur) return 0;
+  const x = t / dur;
+  if (x < 0.15) return x / 0.15;
+  const d = (1 - x) / 0.85;
+  return d * d;
+}
+let beatStart = 0, period = 1000, gap = 320;
+function startBeat(at) {
+  beatStart = at;
+  period = 60000 / bpm;
+  gap = Math.min(320, Math.max(150, period * 0.33));
+}
+
+// ---- Atem-Kurve (gleich wie auf der Biene): 40 % ein, 60 % aus ----
+let breathStart = 0;
+function breathWave(now) {
+  const per = 60000 / rate;
+  const p = ((now - breathStart) % per) / per;
+  if (p < ATEM_EINATMEN_ANTEIL) return 0.5 - 0.5 * Math.cos(Math.PI * p / ATEM_EINATMEN_ANTEIL);
+  return 0.5 + 0.5 * Math.cos(Math.PI * (p - ATEM_EINATMEN_ANTEIL) / (1 - ATEM_EINATMEN_ANTEIL));
+}
+
+function frame(now) {
+  let v = 0;
+  if (on) {
+    if (now - beatStart >= period) {
+      const next = beatStart + period;
+      startBeat(next);
+      if (now - next >= period) startBeat(now);
+    }
+    const t = now - beatStart;
+    v = pulseEnv(t, S1_MS) + S2_FAKTOR * pulseEnv(t - gap, S2_MS);
+  }
+  orb.style.setProperty('--v', v.toFixed(3));
+
+  const b = bOn ? breathWave(now) : 0;
+  lung.style.setProperty('--b', b.toFixed(3));
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---- Anzeige ----
+function render() {
+  orb.setAttribute('aria-pressed', String(on));
+  $('go').hidden = on;
+  $('num').hidden = $('unit').hidden = !on;
+  $('num').textContent = bpm;
+  $('bpmOut').textContent = bpm + ' bpm';
+  $('strOut').textContent = strength + ' %';
+  orb.style.setProperty('--s', (strength / 100).toFixed(2));
+  document.querySelectorAll('.chip[data-bpm]').forEach((c) => c.setAttribute('aria-pressed', String(Number(c.dataset.bpm) === bpm)));
+
+  lung.setAttribute('aria-pressed', String(bOn));
+  $('bGo').hidden = bOn;
+  $('bNum').hidden = $('bUnit').hidden = !bOn;
+  $('bNum').textContent = rate;
+  $('rateOut').textContent = rate + ' / min';
+  $('bstrOut').textContent = bStrength + ' %';
+  lung.style.setProperty('--s', (bStrength / 100).toFixed(2));
+  document.querySelectorAll('.chip[data-rate]').forEach((c) => c.setAttribute('aria-pressed', String(Number(c.dataset.rate) === rate)));
+}
+
+// ---- Senden an die Biene ----
+// Web Bluetooth erlaubt nur eine Übertragung gleichzeitig. Darum eine gemeinsame Warteschlange:
+// Herz und Atem markieren sich als "geändert", gesendet wird immer der letzte Stand.
+let sending = false, dirtyH = false, dirtyB = false;
+
+async function writeChar(ch, data) {
+  if (ch.writeValueWithResponse) await ch.writeValueWithResponse(data);
+  else await ch.writeValue(data);
+}
+async function flush() {
+  if (sending) return;
+  sending = true;
+  try {
+    while (dirtyH || dirtyB) {
+      if (dirtyH) {
+        dirtyH = false;
+        if (heartChar) await writeChar(heartChar, new Uint8Array([bpm, Math.round(strength / 100 * 255), on ? 1 : 0]));
+      }
+      if (dirtyB) {
+        dirtyB = false;
+        if (breathChar) await writeChar(breathChar, new Uint8Array([rate, Math.round(bStrength / 100 * 255), bOn ? 1 : 0]));
+      }
+    }
+  } catch (e) {
+    setStatus('Senden fehlgeschlagen: ' + e.message, 'warn');
+  }
+  sending = false;
+}
+function pushHeart()  { dirtyH = true; flush(); }
+function pushBreath() { dirtyB = true; flush(); }
+
+function setOn(v) {
+  on = v;
+  if (on) startBeat(performance.now());
+  render(); pushHeart();
+}
+function setBreathOn(v) {
+  bOn = v;
+  if (bOn) breathStart = performance.now();
+  render(); pushBreath();
+}
+
+orb.addEventListener('click', () => setOn(!on));
+$('bpm').addEventListener('input', (e) => { bpm = Number(e.target.value); render(); pushHeart(); });
+$('str').addEventListener('input', (e) => { strength = Number(e.target.value); render(); pushHeart(); });
+document.querySelectorAll('.chip[data-bpm]').forEach((c) => c.addEventListener('click', () => {
+  bpm = Number(c.dataset.bpm); $('bpm').value = bpm; render(); pushHeart();
+}));
+
+lung.addEventListener('click', () => setBreathOn(!bOn));
+$('rate').addEventListener('input', (e) => { rate = Number(e.target.value); render(); pushBreath(); });
+$('bstr').addEventListener('input', (e) => { bStrength = Number(e.target.value); render(); pushBreath(); });
+document.querySelectorAll('.chip[data-rate]').forEach((c) => c.addEventListener('click', () => {
+  rate = Number(c.dataset.rate); $('rate').value = rate; render(); pushBreath();
+}));
+
+// ---- Bluetooth ----
+function onDisconnect() {
+  heartChar = null; breathChar = null; device = null;
+  on = false; bOn = false; render();
+  connectBtn.textContent = 'Mit Biene verbinden';
+  connectBtn.disabled = false;
+  setStatus('Verbindung getrennt. Die Biene hat aufgehört zu schlagen und zu atmen.', 'warn');
+}
+async function connect() {
+  connectBtn.disabled = true;
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'Xiao' }, { services: [SERVICE_UUID] }],
+      optionalServices: [SERVICE_UUID],
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnect);
+    setStatus('Verbinde …');
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SERVICE_UUID);
+
+    try { heartChar = await svc.getCharacteristic(HEART_UUID); } catch (e) { heartChar = null; }
+    try { breathChar = await svc.getCharacteristic(BREATH_UUID); } catch (e) { breathChar = null; }
+
+    connectBtn.textContent = 'Trennen';
+    connectBtn.disabled = false;
+
+    if (!heartChar && !breathChar) {
+      setStatus('Verbunden, aber auf der Biene läuft noch die alte Firmware ohne Herzschlag und Atmung.', 'warn');
+      return;
+    }
+    if (!breathChar) {
+      setStatus('Verbunden. Die Firmware hat noch keine Atmung, nur der Herzschlag funktioniert.', 'warn');
+    } else if (!heartChar) {
+      setStatus('Verbunden. Die Firmware hat keinen Herzschlag, nur die Atmung funktioniert.', 'warn');
+    } else {
+      setStatus('Verbunden mit ' + (device.name || 'Biene') + '.', 'ok');
+    }
+    pushHeart(); pushBreath();
+  } catch (e) {
+    connectBtn.disabled = false;
+    setStatus(e.name === 'NotFoundError' ? 'Keine Biene ausgewählt.' : 'Verbinden fehlgeschlagen: ' + e.message, 'warn');
+  }
+}
+connectBtn.addEventListener('click', () => {
+  if (device && device.gatt && device.gatt.connected) device.gatt.disconnect();
+  else connect();
+});
+if (!navigator.bluetooth) {
+  connectBtn.disabled = true;
+  setStatus('Dieser Browser kann kein Web Bluetooth. Nimm Chrome oder Edge. Die Vorschau funktioniert trotzdem.', 'warn');
+}
+render();
+</script>
+</body>
+</html>

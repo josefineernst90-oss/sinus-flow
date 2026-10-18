@@ -95,6 +95,9 @@
   .switch[aria-pressed="true"] { border-color: var(--auto); background: var(--auto-soft); }
   .switch .state { font-weight: 650; }
   .summary { font-size: 14px; color: var(--txt); }
+  .batt { font-size: 14px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; white-space: nowrap; }
+  .batt.low { color: var(--accent); border-color: var(--accent); }
+  .batt.crit { color: #ff6b5e; border-color: #ff6b5e; }
   .hint { color: var(--muted); font-size: 13px; width: 100%; margin-top: 14px; }
   @media (prefers-reduced-motion: reduce) { .orb, .lung { transition: none; } }
 </style>
@@ -102,6 +105,7 @@
 <body>
 <header>
   <h1>Herzschlag & Atmung</h1>
+  <span class="batt" id="batt" hidden aria-live="polite">Akku –</span>
   <button class="btn primary" id="connect" type="button">Mit Biene verbinden</button>
 </header>
 <div class="status" id="status" role="status" aria-live="polite">Nicht verbunden. Du siehst nur die Vorschau.</div>
@@ -190,7 +194,25 @@
       <button class="chip" type="button" data-iv="60">stündlich</button>
     </div>
     <div class="summary" id="summary"></div>
-    <p class="sub">Das Programm besteht aus Herzschlag und Atmung wie oben eingestellt (nur was an ist). Die Biene speichert alles beim Trennen und läuft danach ohne Verbindung allein. Die erste Session beginnt ein Intervall nach dem Trennen.</p>
+    <p class="sub">Das Programm besteht aus Herzschlag und Atmung wie oben eingestellt (nur was an ist). Die Biene speichert alles beim Trennen und läuft danach ohne Verbindung allein. Die erste Session beginnt ein Intervall nach dem Trennen. Ablauf: Ankündigung (zwei kräftige Schläge), dann wartet die Biene auf 10 s Stillstand, bevor das Programm startet. Kommt keine Ruhe, kündigt sie nach 2 min erneut an, nach drei Versuchen fällt die Session aus. Am Ende klingt der Herzschlag aus, danach kommen zwei weiche Klopfer.</p>
+    <div class="row">
+      <label for="ann">Stärke der Ankündigung <output id="annOut">80 %</output></label>
+      <input id="ann" type="range" min="0" max="100" step="5" value="80">
+    </div>
+    <p class="sub">Eigene Stärke, damit du die Ankündigung auch beim Gehen spürst. 0 = stumm.</p>
+  </section>
+
+  <!-- Panikmodus -->
+  <section class="panel auto" aria-label="Panikmodus">
+    <h2>Panikmodus</h2>
+    <button class="btn switch" id="pn" type="button" aria-pressed="true">
+      <span>Zweimal auf das Gerät tippen startet ihn</span><span class="state" id="pnState">An</span>
+    </button>
+    <div class="row">
+      <label for="ths">Klopf-Härte <output id="thsOut">6</output></label>
+      <input id="ths" type="range" min="2" max="20" step="1" value="6">
+    </div>
+    <p class="sub">Fester Rhythmus 4-7-8: 4 s einatmen, 7 s halten, 8 s ausatmen. Einatmen mit deinem Atem-Muster, beim Halten ein leiser langsamer Herzschlag, beim Ausatmen der Herzschlag. Stärke wie im Programm, etwas kräftiger. Zweimal tippen stoppt ihn, sonst endet er nach 5 min. Der Timer läuft unabhängig weiter, hat aber hinten an. Kleiner = empfindlicher: Löst es beim Gehen von selbst aus, den Wert erhöhen. Tippen weckt außerdem das Bluetooth.</p>
   </section>
 
   <div class="hint">Tippe die Kugeln zum Starten und Stoppen. Solange du verbunden bist, spürst du direkt, was hier eingestellt ist. Die Kugeln zeigen den Rhythmus: Die Atem-Kugel schwillt beim Einatmen, die Herz-Kugel schlägt im Ausatmen. Ist die Biene nach 2 Minuten ohne Verbindung nicht mehr zu finden: zweimal klopfen weckt das Bluetooth. Funktioniert in Chrome oder Edge.</div>
@@ -201,7 +223,7 @@
 const SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
 const HEART_UUID   = "19b10003-e8f2-537e-4f6c-d104768a1214";   // [BPM, Stärke 0..255, An 0/1]
 const BREATH_UUID  = "19b10004-e8f2-537e-4f6c-d104768a1214";   // [Atemzüge/min, Stärke 0..255, An 0/1, Stil 0..4]
-const PLAN_UUID    = "19b10005-e8f2-537e-4f6c-d104768a1214";   // [Automatik 0/1, Intervall u16 LE, Dauer u16 LE]
+const PLAN_UUID    = "19b10005-e8f2-537e-4f6c-d104768a1214";   // [Automatik 0/1, Intervall u16 LE, Dauer u16 LE, Ankündigung 0..255, Klopf-Härte 1..31, Panik 0/1]
 const S1_MS = 200, S2_MS = 150, S2_FAKTOR = 0.70;
 const ATEM_EINATMEN_ANTEIL = 0.40;
 const AUSATMEN_VERZOEGERUNG_MS = 60, AUS_F0 = 0.92, AUS_F1 = 1.08;
@@ -212,7 +234,9 @@ const orb = $('orb'), lung = $('lung'), connectBtn = $('connect'), statusEl = $(
 let on = false, bpm = 60, strength = 60;               // Herz, Stärke in Prozent
 let bOn = false, rate = 12, bStrength = 70, style = 0; // Atem, Stärke in Prozent, Stil 0 Pulsfolge, 1 Welle, 2 Brandung, 3 Klopfen, 4 Rauschen
 let sOn = false, iv = 30, du = 3;                      // Automatik
+let ann = 80, panicOn = true, ths = 6;                 // Ankündigung in Prozent, Panikmodus per Doppelklopfen, Klopf-Härte
 let device = null, heartChar = null, breathChar = null, planChar = null;
+let battChar = null, battTimer = null;
 
 function setStatus(text, kind) { statusEl.textContent = text; statusEl.className = 'status' + (kind ? ' ' + kind : ''); }
 
@@ -350,6 +374,10 @@ function render() {
   $('ivOut').textContent = iv + ' min';
   $('duOut').textContent = du + ' min';
   document.querySelectorAll('.chip[data-iv]').forEach((c) => c.setAttribute('aria-pressed', String(Number(c.dataset.iv) === iv)));
+  $('ann').value = ann; $('annOut').textContent = ann === 0 ? 'stumm' : ann + ' %';
+  $('pn').setAttribute('aria-pressed', String(panicOn));
+  $('pnState').textContent = panicOn ? 'An' : 'Aus';
+  $('ths').value = ths; $('thsOut').textContent = String(ths);
   const parts = [];
   if (on) parts.push('Herzschlag');
   if (bOn) parts.push('Atmung');
@@ -384,7 +412,7 @@ async function flush() {
       }
       if (dirtyS) {
         dirtyS = false;
-        if (planChar) await writeChar(planChar, new Uint8Array([sOn ? 1 : 0, iv & 255, iv >> 8, du & 255, du >> 8]));
+        if (planChar) await writeChar(planChar, new Uint8Array([sOn ? 1 : 0, iv & 255, iv >> 8, du & 255, du >> 8, Math.round(ann / 100 * 255), ths, panicOn ? 1 : 0]));
       }
     }
   } catch (e) {
@@ -429,6 +457,9 @@ document.querySelectorAll('.chip[data-style]').forEach((c) => c.addEventListener
 $('sw').addEventListener('click', () => { sOn = !sOn; render(); pushPlan(); });
 $('iv').addEventListener('input', (e) => { iv = Number(e.target.value); if (du > iv) du = iv; render(); pushPlan(); });
 $('du').addEventListener('input', (e) => { du = Number(e.target.value); if (du > iv) iv = du; render(); pushPlan(); });
+$('ann').addEventListener('input', (e) => { ann = Number(e.target.value); render(); pushPlan(); });
+$('pn').addEventListener('click', () => { panicOn = !panicOn; render(); pushPlan(); });
+$('ths').addEventListener('input', (e) => { ths = Number(e.target.value); render(); pushPlan(); });
 document.querySelectorAll('.chip[data-iv]').forEach((c) => c.addEventListener('click', () => {
   iv = Number(c.dataset.iv); if (du > iv) du = iv; render(); pushPlan();
 }));
@@ -459,6 +490,11 @@ async function readState() {
       iv = d.getUint16(1, true) || 30;
       du = Math.min(iv, d.getUint16(3, true) || 3);
     }
+    if (d.byteLength >= 8) {
+      ann = Math.round(d.getUint8(5) / 255 * 100);
+      ths = Math.max(2, Math.min(20, d.getUint8(6) || 6));
+      panicOn = !!(d.getUint8(7) & 1);
+    }
   }
   $('bpm').value = bpm; $('str').value = strength;
   $('rate').value = rate; $('bstr').value = bStrength;
@@ -468,8 +504,41 @@ async function readState() {
   render();
 }
 
+// ---- Akku ----
+function showBattery(pct) {
+  const el = $('batt');
+  el.hidden = false;
+  el.textContent = 'Akku ' + pct + ' %';
+  el.className = 'batt' + (pct <= 10 ? ' crit' : pct <= 20 ? ' low' : '');
+}
+function hideBattery() {
+  if (battTimer) { clearInterval(battTimer); battTimer = null; }
+  battChar = null;
+  $('batt').hidden = true;
+}
+async function readBattery() {
+  if (!battChar) return;
+  try { showBattery((await battChar.readValue()).getUint8(0)); } catch (e) { /* beim nächsten Mal wieder */ }
+}
+async function startBattery(server) {
+  try {
+    const bsvc = await server.getPrimaryService('battery_service');
+    battChar = await bsvc.getCharacteristic('battery_level');
+    await readBattery();
+    try {
+      await battChar.startNotifications();   // die Biene meldet den Stand alle 30 s, kein Abfragen nötig (Web Bluetooth verträgt keine parallelen Zugriffe)
+      battChar.addEventListener('characteristicvaluechanged', (e) => showBattery(e.target.value.getUint8(0)));
+    } catch (e) {
+      battTimer = setInterval(readBattery, 120000);   // Notlösung ohne Benachrichtigung
+    }
+  } catch (e) {
+    battChar = null;   // Firmware ohne Akku-Service
+  }
+}
+
 // ---- Bluetooth ----
 function onDisconnect() {
+  hideBattery();
   heartChar = null; breathChar = null; planChar = null; device = null;
   connectBtn.textContent = 'Mit Biene verbinden';
   connectBtn.disabled = false;
@@ -482,7 +551,7 @@ async function connect() {
   try {
     device = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: 'Xiao' }, { services: [SERVICE_UUID] }],
-      optionalServices: [SERVICE_UUID],
+      optionalServices: [SERVICE_UUID, 'battery_service'],
     });
     device.addEventListener('gattserverdisconnected', onDisconnect);
     setStatus('Verbinde …');
@@ -495,6 +564,7 @@ async function connect() {
 
     connectBtn.textContent = 'Trennen';
     connectBtn.disabled = false;
+    await startBattery(server);
 
     if (!heartChar && !breathChar) {
       setStatus('Verbunden, aber auf der Biene läuft noch die alte Firmware ohne Herzschlag und Atmung.', 'warn');

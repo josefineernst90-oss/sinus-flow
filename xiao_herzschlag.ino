@@ -13,8 +13,11 @@
     Vibe-Char      19b10002-...  (Write)          uint8 = Vibrationsstärke (0..255)
     Herz-Char      19b10003-...  (Read | Write)   3 Byte = [BPM 30..180, Stärke 0..255, An 0/1]
     Atem-Char      19b10004-...  (Read | Write)   4 Byte = [Atemzüge/min 4..30, Stärke 0..255, An 0/1, Stil 0..4]
-                                                  (Stil 0 = Pulsfolge, 1 = Welle, 2 = Brandung, 3 = Klopfen, 4 = Rauschen; 3 Byte werden auch akzeptiert)
-    Plan-Char      19b10005-...  (Read | Write)   5 Byte = [Automatik An 0/1, Intervall Min (u16 LE), Dauer Min (u16 LE)]
+                                                  (Stil 0 = Pulsfolge, 1 = Welle, 2 = Brandung, 3 = Klopfen, 4 = Rauschen)
+    Plan-Char      19b10005-...  (Read | Write)   8 Byte = [Automatik An 0/1, Intervall Min (u16 LE), Dauer Min (u16 LE),
+                                                           Ankündigung Stärke 0..255, Klopf-Härte 1..31, Panikmodus An 0/1]
+                                                  (5 Byte werden auch akzeptiert)
+    Akku           Standard-Battery-Service 0x180F / 0x2A19 (Read | Notify), Prozent
 
   DRV2605 (I2C 0x5A): VIN->3V3, GND->GND, SDA->D4, SCL->D5, Motor an die Motor-Ausgänge.
   RTP-Format: signed (Standard). 0 = aus, 127 = Vollgas, negative Werte = aktives Bremsen.
@@ -22,22 +25,35 @@
   Rhythmus
     - Nur Herzschlag: läuft durchgehend.
     - Nur Atmung:     Einatmen (40 %) mit dem gewählten Muster, Ausatmen (60 %) still.
-    - Beide:          Einatmen = Atem-Muster, Ausatmen = Herzschlag (wird zum Ende hin langsamer,
-                      wie bei der natürlichen Atemrhythmik). Beides läuft nie gleichzeitig am Motor.
+    - Beide:          Einatmen = Atem-Muster, Ausatmen = Herzschlag (wird zum Ende hin langsamer).
+
+  Automatik (nur ohne Verbindung)
+    Alle X Minuten (von Start zu Start) für Y Minuten. Ablauf je Auslösung:
+      1. Ankündigung: zwei kräftige Schläge (eigene Stärke, damit man sie beim Gehen spürt).
+      2. Warten auf Stillstand: erst nach 10 s Ruhe startet das Programm.
+         Kommt keine Ruhe, wird nach 2 min erneut angekündigt; nach insgesamt 3 Versuchen fällt die Session aus.
+      3. Programm läuft Y Minuten.
+      4. Ende-Signal: ausklingender Herzschlag, dann zwei weiche Klopfer.
+    Die erste Auslösung kommt X Minuten nach dem Trennen bzw. dem Einschalten.
+    Mit Verbindung läuft immer direkt das, was die Seite zeigt.
+
+  Panikmodus
+    Zweimal auf das Gerät tippen startet ihn, zweimal tippen stoppt ihn (sonst nach 5 min Ende).
+    Fester Rhythmus 4-7-8: 4 s einatmen, 7 s halten, 8 s ausatmen.
+      Einatmen = dein Einatem-Muster, Halten = sehr leiser langsamer Herzschlag, Ausatmen = Herzschlag (langsamer werdend).
+    Stärke und Muster kommen aus dem Programm, Stärke +20 %. Der Timer läuft unabhängig weiter;
+    kollidiert er mit dem Panikmodus, hat der Panikmodus Vorrang und die Session wird um 2 min verschoben.
 
   Verbindung / Schlaf
     - Die Verbindung wird nie von der Biene getrennt.
     - Ohne Verbindung schläft nach 2 Minuten nur das Bluetooth (Werbung aus). Das Gerät selbst läuft weiter.
-    - Zweimal klopfen weckt das Bluetooth (kurzes Doppelsurren als Bestätigung).
+    - Doppelklopfen weckt das Bluetooth (und startet zugleich den Panikmodus, falls an).
     - Ohne funktionierende IMU kann nichts wecken, dann bleibt die Biene immer auffindbar.
 
   Konfiguration
     - Wird beim Trennen im Flash gespeichert (nur wenn etwas geändert wurde) und beim Start geladen.
-    - Automatik: alle X Minuten für Y Minuten läuft das gespeicherte Programm selbstständig, solange
-      keine Verbindung besteht. Die erste Session startet X Minuten nach dem Trennen bzw. dem Einschalten.
-    - Mit Verbindung läuft immer direkt das, was die Seite zeigt.
 
-  Keine LED-Ausgaben mehr. (Die rote Lade-LED ist Hardware und lässt sich nicht abschalten.)
+  Keine LED-Ausgaben. (Die rote Lade-LED ist Hardware und lässt sich nicht abschalten.)
 */
 
 #include <bluefruit.h>
@@ -50,17 +66,35 @@ using namespace Adafruit_LittleFS_Namespace;
 // ---- Debug ----
 const bool DEBUG_STATUS = true;    // alle 2 s Statuszeile im Serial Monitor
 
+// ---- Pins ----
+#define IMU_INT1_PIN  11   // P0.11, intern mit LSM6DS3 INT1 verdrahtet
+
 // ---- Zeitkonstanten ----
-const float         NOISE_FLOOR  = 0.05;    // g — darunter gilt es als Ruhe
+const float         NOISE_FLOOR  = 0.05;    // g — darunter gilt es als Ruhe (Bewegungs-Notify)
 const unsigned long SAMPLE_MS    = 40;      // ~25 Hz Abtastung
 const unsigned long VIBE_MS      = 350;     // Pulsdauer je Befehl
 const unsigned long BAT_MS       = 30000;   // Akku alle 30 s messen
 const unsigned long STATUS_MS    = 2000;    // Statuszeile
-const unsigned long TAP_POLL_MS  = 10;      // Doppelklopf-Abfrage im BLE-Schlaf
+const unsigned long TAP_SPERRE_MS = 1500;   // nach einem Doppelklopfen kurz keine neue Erkennung
 
 // ---- Bluetooth-Schlaf ----
 const unsigned long BLE_SLEEP_MS = 120000;  // 2 min ohne Verbindung -> Bluetooth schläft
-const uint8_t       TAP_SCHWELLE = 6;       // Klopf-Schwelle (1 = empfindlich ... 31 = hart), je 62,5 mg
+
+// ---- Automatik: Stillstand ----
+const float         STILL_DELTA  = 0.05f;   // g, geglättete Bewegung darunter = Ruhe
+const unsigned long STILL_MS     = 10000;   // so lange Ruhe, bis das Programm startet
+const unsigned long WAIT_MS      = 120000;  // so lange wird pro Versuch auf Ruhe gewartet
+const int           MAX_VERSUCHE = 3;       // Ankündigungen je Auslösung (1 + 2 Aufschübe)
+
+// ---- Panikmodus ----
+const unsigned long PANIK_EIN_MS    = 4000;
+const unsigned long PANIK_HALTEN_MS = 7000;
+const unsigned long PANIK_AUS_MS    = 8000;
+const unsigned long PANIK_ZYKLUS_MS = PANIK_EIN_MS + PANIK_HALTEN_MS + PANIK_AUS_MS;
+const unsigned long PANIK_MAX_MS    = 300000;   // spätestens nach 5 min Ende
+const float         PANIK_BOOST     = 1.2f;     // Stärke +20 %
+const float         PANIK_HALTEN_SKALA = 0.55f; // Herzschlag beim Halten leiser
+const unsigned long PANIK_HALTEN_PERIODE_MS = 1400;   // ~43 bpm beim Halten
 
 // ---- Motor ----
 #define MOTOR_LRA 0   // 0 = ERM (Exzentermotor, dein Motor), 1 = LRA
@@ -110,11 +144,14 @@ const float         AUS_F1 = 1.08f;   // Schlagabstand am Ende (langsamer)
 #define REG_TAP_THS_6D  0x59   // Bit4..0 = Klopf-Schwelle
 #define REG_INT_DUR2    0x5A   // DUR | QUIET | SHOCK
 #define REG_WAKE_UP_THS 0x5B   // Bit7 = Doppelklopf statt Einzelklopf
+#define REG_MD1_CFG     0x5E   // Bit3 = Doppelklopf auf INT1
 
 // ---- Konfigurationsdatei ----
-#define CFG_FILE   "/cfg.bin"
-#define CFG_MAGIC  0xA8
-#define CFG_LEN    13
+#define CFG_FILE      "/cfg.bin"
+#define CFG_MAGIC     0xA9     // 0xA8 (13 Byte, ältere Version) wird noch gelesen
+#define CFG_MAGIC_OLD 0xA8
+#define CFG_LEN       16
+#define CFG_LEN_OLD   13
 
 // ---- Minimaler LSM6DS3-Treiber ----
 class SimpleLSM6DS3 {
@@ -226,32 +263,47 @@ volatile uint8_t  breathStyle    = 0;      // 0 Pulsfolge, 1 Welle, 2 Brandung, 
 volatile bool     schedOn        = false;  // Automatik
 volatile uint16_t schedIntervalMin = 30;   // alle X Minuten
 volatile uint16_t schedDurationMin = 3;    // für Y Minuten
+volatile uint8_t  announceStrength = 200;  // Stärke von Ankündigung und Ende-Signal (0 = stumm)
+volatile uint8_t  tapThs         = 6;      // Klopf-Härte 1 (empfindlich) .. 31 (hart), je 62,5 mg
+volatile bool     panicEnabled   = true;   // Doppelklopfen startet den Panikmodus
 
-volatile bool cfgDirty   = false;   // seit dem letzten Speichern geändert
-volatile bool savePending = false;  // beim Trennen gesetzt, loop() speichert
+volatile bool cfgDirty    = false;   // seit dem letzten Speichern geändert
+volatile bool savePending = false;   // beim Trennen gesetzt, loop() speichert
+volatile bool tapCfgDirty = false;   // Klopf-Härte muss in den Sensor geschrieben werden
 
 // ---- Zustand ----
 float pax = 0, pay = 0, paz = 0;
 bool  primed    = false;
 bool  wasMoving = false;
+float motionEma = 1.0f;              // geglättete Bewegung (g pro Abtastung)
+unsigned long stillSince = 0;        // seit wann Ruhe herrscht (0 = nicht ruhig)
 unsigned long lastStatusAt = 0;
 unsigned long vibeOffAt    = 0;
 int  currentVibe = 0;
 int  targetVibe  = 0;
 unsigned long lastVibeTick = 0;
 unsigned long lastSampleAt = 0;
+unsigned long lastTapAt    = 0;
 uint8_t lastMotionVal = 0;
 
 // Session: läuft das Programm gerade? Mit Verbindung immer, ohne Verbindung nach Automatik.
 volatile bool sessionActive = true;
-bool          schedArmed    = false;
-unsigned long schedNextStart = 0;
+
+enum SchedState { SCH_OFF, SCH_IDLE, SCH_WAIT, SCH_RUN };
+SchedState    schedState      = SCH_OFF;
+unsigned long schedNextStart  = 0;
 unsigned long schedSessionEnd = 0;
+unsigned long schedWaitStart  = 0;
+int           schedAttempts   = 0;
+bool          schedDeferred   = false;   // Session wurde vom Panikmodus verdrängt
+
+// Panikmodus
+bool          panicActive  = false;
+unsigned long panicStartAt = 0;
 
 // Bluetooth-Schlaf
 bool          bleSleeping  = false;
 unsigned long bleIdleSince = 0;
-unsigned long lastTapPoll  = 0;
 
 // ==========================================================================
 // Konfiguration speichern / laden
@@ -271,6 +323,9 @@ void saveConfig() {
   b[10] = (schedIntervalMin >> 8) & 0xFF;
   b[11] = schedDurationMin & 0xFF;
   b[12] = (schedDurationMin >> 8) & 0xFF;
+  b[13] = announceStrength;
+  b[14] = tapThs;
+  b[15] = panicEnabled ? 1 : 0;
 
   InternalFS.remove(CFG_FILE);
   File f(InternalFS);
@@ -290,7 +345,9 @@ void loadConfig() {
   if (!f.open(CFG_FILE, FILE_O_READ)) { Serial.println("Keine gespeicherte Konfiguration"); return; }
   int n = f.read(b, CFG_LEN);
   f.close();
-  if (n != CFG_LEN || b[0] != CFG_MAGIC) { Serial.println("Konfiguration ungueltig - Standardwerte"); return; }
+  bool neu = (n == CFG_LEN     && b[0] == CFG_MAGIC);
+  bool alt = (n == CFG_LEN_OLD && b[0] == CFG_MAGIC_OLD);
+  if (!neu && !alt) { Serial.println("Konfiguration ungueltig - Standardwerte"); return; }
 
   int bpm = b[1];     if (bpm < 30) bpm = 30;   if (bpm > 180) bpm = 180;
   int rate = b[4];    if (rate < 4) rate = 4;   if (rate > 30) rate = 30;
@@ -307,30 +364,30 @@ void loadConfig() {
   schedOn = b[8] & 1;
   schedIntervalMin = (uint16_t)iv;
   schedDurationMin = (uint16_t)du;
+  if (neu) {
+    announceStrength = b[13];
+    int th = b[14]; if (th < 1) th = 1; if (th > 31) th = 31;
+    tapThs = (uint8_t)th;
+    panicEnabled = b[15] & 1;
+  }
   Serial.println("Konfiguration geladen");
 }
 
 // ==========================================================================
 // IMU-Konfiguration
 // ==========================================================================
+void applyTapThreshold() {
+  imu.writeRegister(REG_TAP_THS_6D, tapThs & 0x1F);
+}
+
 void configureIMU() {
   imu.writeRegister(REG_CTRL2_G,     0x00);            // Gyro aus
-  imu.writeRegister(REG_CTRL1_XL,    0x20);            // Accel 26 Hz, ±2g (Bewegung)
+  imu.writeRegister(REG_CTRL1_XL,    0x60);            // Accel 416 Hz, ±2g (nötig für sichere Klopf-Erkennung)
   imu.writeRegister(REG_TAP_CFG,     0x8F);            // Interrupts an, Tap X/Y/Z, Latch
-  imu.writeRegister(REG_TAP_THS_6D,  TAP_SCHWELLE & 0x1F);
+  applyTapThreshold();
   imu.writeRegister(REG_INT_DUR2,    0x7F);            // Doppelklopf-Zeitfenster
   imu.writeRegister(REG_WAKE_UP_THS, 0x80);            // Doppelklopf aktiv
-}
-
-void imuAwake() {
-  if (!imuOk) return;
-  imu.writeRegister(REG_CTRL1_XL, 0x20);               // 26 Hz
-}
-
-void imuTapListen() {
-  if (!imuOk) return;
-  imu.writeRegister(REG_CTRL1_XL, 0x60);               // 416 Hz, damit Klopfen sicher erkannt wird
-  delay(10);
+  imu.writeRegister(REG_MD1_CFG,     0x08);            // Doppelklopf auf INT1
   uint8_t s = 0;
   imu.readRegisters(REG_TAP_SRC, &s, 1);               // alten Latch löschen
 }
@@ -378,18 +435,24 @@ static unsigned long gapFor(unsigned long period) {
   return gap;
 }
 
+// Maximale Herz-Stärke (RTP) aus dem Stärke-Regler, optional skaliert
+static int heartMaxV(float scale) {
+  if (heartStrength == 0) return 0;
+  int m = (int)(map(heartStrength, 1, 255, HERZ_MIN, RTP_MAX) * scale + 0.5f);
+  if (m < RTP_MIN) m = RTP_MIN;
+  if (m > RTP_MAX) m = RTP_MAX;
+  return m;
+}
+
 static void heartStartBeat(unsigned long startAt, float factor) {
   beatStartAt = startAt;
   beatPeriod  = (unsigned long)((60000UL / heartBpm) * factor);
   beatGap     = gapFor(beatPeriod);
 }
 
-// Form eines Schlags (lub-dub) zum Zeitpunkt now; Wert signed, kann negativ sein = Bremse
-static int beatShape(unsigned long now) {
-  float t   = (float)(now - beatStartAt);
-  float tS2 = t - (float)beatGap;
-  int maxv = (heartStrength == 0) ? 0 : (int)map(heartStrength, 1, 255, HERZ_MIN, RTP_MAX);
-
+// Form eines Schlags (lub-dub) t ms nach Schlagbeginn; Wert signed, kann negativ sein = Bremse
+static int beatShapeT(float t, unsigned long gap, int maxv) {
+  float tS2 = t - (float)gap;
   float v = heartEnv(t, (float)S1_MS) + S2_FAKTOR * heartEnv(tS2, (float)S2_MS);
   int val = (int)(v * maxv + 0.5f);
 
@@ -406,6 +469,10 @@ static int beatShape(unsigned long now) {
     else if (tS2 >= S2_MS    && tS2 < S2_MS + BRAKE_MS)   val = brake;             // Bremse nach dub
   }
   return val;
+}
+
+static int beatShape(unsigned long now) {
+  return beatShapeT((float)(now - beatStartAt), beatGap, heartMaxV(1.0f));
 }
 
 // Herzschlag durchgehend (wenn keine Atmung läuft)
@@ -454,14 +521,30 @@ static int heartExhale(unsigned long now, unsigned long cycleStart, long cycleId
   return beatShape(now);
 }
 
-// Atmung: nur das Einatmen trägt ein Muster, das Ausatmen bleibt still
-static int breathInhale(unsigned long posMs, unsigned long inhaleMs) {
+// Herzschläge in einem Zeitfenster (tw = ms seit Fensterbeginn), Abstand wandert von f0 auf f1.
+// Zustandslos, daher auch für den Panikmodus geeignet.
+static int windowBeatValue(float tw, float windowLen, float basePeriod, float f0, float f1, int maxv) {
+  float start = 0;
+  while (start < windowLen) {
+    float per = basePeriod * (f0 + (f1 - f0) * start / windowLen);
+    unsigned long gap = gapFor((unsigned long)per);
+    if (start + gap + S2_MS > windowLen) return 0;      // passt nicht mehr ins Fenster
+    if (tw < start + per) return beatShapeT(tw - start, gap, maxv);
+    start += per;
+  }
+  return 0;
+}
+
+// Atmung: nur das Einatmen trägt ein Muster, das Ausatmen bleibt still.
+// boost > 1 macht es kräftiger (Panikmodus).
+static int breathInhale(unsigned long posMs, unsigned long inhaleMs, float boost = 1.0f) {
   if (breathStrength == 0) return 0;
   float x = (float)posMs / (float)inhaleMs;       // 0..1 im Einatmen
 
   // ---- Stile 2-4: niedriges Band, kein Hochdrehen ----
   if (breathStyle >= 2) {
-    int top = (int)map(breathStrength, 1, 255, RTP_MIN, ATEM_LOW_MAX);
+    int top = (int)(map(breathStrength, 1, 255, RTP_MIN, ATEM_LOW_MAX) * boost + 0.5f);
+    if (top > RTP_MAX) top = RTP_MAX;
 
     if (breathStyle == 2) {
       // Brandung: 2-3 lange, weiche Wellen, jede etwas voller als die vorige
@@ -506,7 +589,8 @@ static int breathInhale(unsigned long posMs, unsigned long inhaleMs) {
     return v;
   }
 
-  int maxb = (int)map(breathStrength, 1, 255, RTP_MIN, ATEM_MAX);
+  int maxb = (int)(map(breathStrength, 1, 255, RTP_MIN, ATEM_MAX) * boost + 0.5f);
+  if (maxb > RTP_MAX) maxb = RTP_MAX;
 
   if (breathStyle == 1) {
     // Welle: weich ansteigend, am Ende des Einatmens abgeschnitten
@@ -536,8 +620,133 @@ static int breathInhale(unsigned long posMs, unsigned long inhaleMs) {
   return 0;
 }
 
+// Panikmodus 4-7-8: el = ms seit Start
+static int panicValue(unsigned long el) {
+  unsigned long pos = el % PANIK_ZYKLUS_MS;
+  if (pos < PANIK_EIN_MS) return breathInhale(pos, PANIK_EIN_MS, PANIK_BOOST);
+
+  if (pos < PANIK_EIN_MS + PANIK_HALTEN_MS) {
+    float tw = (float)(pos - PANIK_EIN_MS);
+    return windowBeatValue(tw, (float)PANIK_HALTEN_MS, (float)PANIK_HALTEN_PERIODE_MS, 1.0f, 1.0f,
+                           heartMaxV(PANIK_BOOST * PANIK_HALTEN_SKALA));
+  }
+  float tw = (float)(pos - PANIK_EIN_MS - PANIK_HALTEN_MS);
+  return windowBeatValue(tw, (float)PANIK_AUS_MS, 60000.0f / heartBpm, AUS_F0, AUS_F1, heartMaxV(PANIK_BOOST));
+}
+
+// ==========================================================================
+// Signale (blockierend, kurz): Ankündigung, Ende, Bestätigung
+// ==========================================================================
+static int announceLevel() {
+  if (announceStrength == 0) return 0;
+  return (int)map(announceStrength, 1, 255, RTP_MIN, RTP_MAX);
+}
+
+static void motorSet(int v) {
+  if (v >  RTP_MAX) v =  RTP_MAX;
+  if (v < -RTP_MAX) v = -RTP_MAX;
+  drv.setRealtimeValue((uint8_t)(int8_t)v);
+}
+
+// Ein kurzer Schlag mit Anstoß und Bremse
+static void buzz(int level, unsigned long ms) {
+  if (!haveDrv || level <= 0) return;
+  int kick = (int)(level * 1.4f); if (kick > RTP_MAX) kick = RTP_MAX;
+  motorSet(kick);  delay(20);
+  motorSet(level); delay(ms > 20 ? ms - 20 : 0);
+  motorSet(-(level * 2 / 5)); delay(BRAKE_MS);
+  motorSet(0);
+}
+
+// Ein Herzschlag (lub-dub) blockierend, anschließend Pause bis period vorbei ist
+static void beatBlocking(int maxv, unsigned long period) {
+  if (!haveDrv) return;
+  unsigned long gap = gapFor(period);
+  unsigned long t0 = millis();
+  unsigned long len = gap + S2_MS + BRAKE_MS + 10;
+  while (millis() - t0 < len) {
+    motorSet(beatShapeT((float)(millis() - t0), gap, maxv));
+    delay(5);
+  }
+  motorSet(0);
+  unsigned long used = millis() - t0;
+  if (period > used) delay(period - used);
+}
+
+static void signalDone() { lastRhythmVal = -1000; }
+
+// Ankündigung: zwei kräftige Schläge
+void announceSignal() {
+  int lvl = announceLevel();
+  buzz(lvl, 150);
+  delay(130);
+  buzz(lvl, 150);
+  signalDone();
+}
+
+// Zwei weiche Klopfer
+static void softKnocks() {
+  int lvl = (int)(announceLevel() * 0.8f);
+  if (lvl > 0 && lvl < RTP_MIN) lvl = RTP_MIN;
+  buzz(lvl, 90);
+  delay(260);
+  buzz(lvl, 90);
+}
+
+// Ende: ausklingender Herzschlag, dann zwei weiche Klopfer
+void endSignal() {
+  int lvl = announceLevel();
+  if (lvl <= 0) { signalDone(); return; }
+  beatBlocking(lvl,                    1100);
+  beatBlocking((int)(lvl * 0.70f),     1400);
+  beatBlocking((int)(lvl * 0.45f),     1600);
+  delay(300);
+  softKnocks();
+  signalDone();
+}
+
+// ==========================================================================
+// Panikmodus
+// ==========================================================================
+void startPanic(unsigned long now) {
+  if (!haveDrv) return;
+  panicActive = true;
+  panicStartAt = now;
+  heartWasRun = false;
+  breathWasRun = false;
+  Serial.println("Panikmodus an");
+}
+
+void stopPanic(unsigned long now, bool full) {
+  if (!panicActive) return;
+  panicActive = false;
+  if (haveDrv) motorSet(0);
+  lastRhythmVal = -1000;
+  currentVibe = 0; targetVibe = 0;
+  if (full) endSignal(); else { softKnocks(); signalDone(); }
+  if (schedDeferred) {                       // verdrängte Session um 2 min verschieben
+    schedNextStart = millis() + 120000UL;
+    schedDeferred = false;
+  }
+  Serial.println("Panikmodus aus");
+  (void)now;
+}
+
+// ==========================================================================
+// Rhythmus ausgeben
+// ==========================================================================
 void rhythmUpdate(unsigned long now) {
   if (!haveDrv) return;
+
+  // Panikmodus hat Vorrang vor allem anderen
+  if (panicActive) {
+    if (now - panicStartAt >= PANIK_MAX_MS) { stopPanic(now, true); return; }
+    int val = panicValue(now - panicStartAt);
+    if (val >  RTP_MAX) val =  RTP_MAX;
+    if (val < -RTP_MAX) val = -RTP_MAX;
+    if (val != lastRhythmVal) { motorSet(val); lastRhythmVal = val; }
+    return;
+  }
 
   bool runH = heartOn  && sessionActive;
   bool runB = breathOn && sessionActive;
@@ -597,66 +806,119 @@ void rhythmUpdate(unsigned long now) {
 }
 
 // ==========================================================================
-// Automatik: alle X Minuten für Y Minuten (nur ohne Verbindung)
+// Automatik: Ankündigung -> auf Stillstand warten -> Session -> Ende-Signal
+// (nur ohne Verbindung)
 // ==========================================================================
 void scheduleUpdate(unsigned long now) {
   if (Bluefruit.connected()) {          // mit Verbindung läuft immer direkt, was die Seite zeigt
     sessionActive = true;
-    schedArmed = false;
+    schedState = SCH_OFF;
+    schedDeferred = false;
     return;
   }
   if (!schedOn || (!heartOn && !breathOn)) {
     sessionActive = false;
-    schedArmed = false;
+    schedState = SCH_OFF;
+    schedDeferred = false;
     return;
   }
 
   unsigned long ivMs = (unsigned long)schedIntervalMin * 60000UL;
   unsigned long duMs = (unsigned long)schedDurationMin * 60000UL;
 
-  if (!schedArmed) {                    // erste Session nach einem Intervall
-    schedArmed = true;
+  // Panikmodus verdrängt die Session; nach dem Panikmodus kommt sie 2 min später
+  if (panicActive) {
     sessionActive = false;
-    schedNextStart = now + ivMs;
+    if (schedState == SCH_WAIT || schedState == SCH_RUN) { schedState = SCH_IDLE; schedDeferred = true; }
+    else if (schedState == SCH_IDLE && (long)(now - schedNextStart) >= 0) schedDeferred = true;
+    else if (schedState == SCH_OFF) { schedState = SCH_IDLE; schedNextStart = now + ivMs; }
     return;
   }
-  if (!sessionActive) {
-    if ((long)(now - schedNextStart) >= 0) {
-      sessionActive = true;
-      schedSessionEnd = now + duMs;
-      schedNextStart  = now + ivMs;     // Intervall von Start zu Start
-    }
-  } else if ((long)(now - schedSessionEnd) >= 0) {
-    sessionActive = false;
+
+  switch (schedState) {
+    case SCH_OFF:                        // erste Auslösung ein Intervall nach dem Trennen / Einschalten
+      schedState = SCH_IDLE;
+      schedNextStart = now + ivMs;
+      sessionActive = false;
+      break;
+
+    case SCH_IDLE:
+      sessionActive = false;
+      if ((long)(now - schedNextStart) >= 0) {
+        announceSignal();
+        now = millis();
+        schedAttempts = 1;
+        schedWaitStart = now;
+        stillSince = 0; motionEma = 1.0f; primed = false;
+        schedNextStart = now + ivMs;     // Intervall von Start zu Start
+        schedState = SCH_WAIT;
+        Serial.println("Automatik: angekuendigt, warte auf Stillstand");
+      }
+      break;
+
+    case SCH_WAIT:
+      sessionActive = false;
+      if (stillSince && now - stillSince >= STILL_MS) {
+        sessionActive = true;
+        schedSessionEnd = now + duMs;
+        schedState = SCH_RUN;
+        Serial.println("Automatik: Session laeuft");
+      } else if (now - schedWaitStart >= WAIT_MS) {
+        if (schedAttempts < MAX_VERSUCHE) {
+          announceSignal();
+          now = millis();
+          schedAttempts++;
+          schedWaitStart = now;
+          Serial.println("Automatik: erneut angekuendigt");
+        } else {
+          schedState = SCH_IDLE;         // aufgegeben, nächste Auslösung kommt nach dem Intervall
+          if ((long)(now - schedNextStart) >= 0) schedNextStart = now + 30000UL;
+          Serial.println("Automatik: Session ausgefallen");
+        }
+      }
+      break;
+
+    case SCH_RUN:
+      if ((long)(now - schedSessionEnd) >= 0) {
+        sessionActive = false;
+        schedState = SCH_IDLE;
+        if (haveDrv) { drv.setRealtimeValue(0); lastRhythmVal = -1000; }
+        endSignal();
+        now = millis();
+        if ((long)(now - schedNextStart) >= 0) schedNextStart = now + 30000UL;
+        Serial.println("Automatik: Session beendet");
+      }
+      break;
   }
 }
 
 // ==========================================================================
-// Bluetooth-Schlaf / Wecken
+// Bluetooth-Schlaf / Doppelklopfen
 // ==========================================================================
-void wakeBuzz() {
-  if (!haveDrv) return;
-  for (int i = 0; i < 2; i++) {
-    drv.setRealtimeValue(110);  delay(40);
-    drv.setRealtimeValue(0);    delay(80);
-  }
-  lastRhythmVal = -1000;        // Rhythmus sendet danach wieder neu
-}
-
 void bleSleep() {
   Bluefruit.Advertising.stop();
   bleSleeping = true;
-  imuTapListen();
   Serial.println("Bluetooth schlaeft - zweimal klopfen weckt");
 }
 
-void bleWake(unsigned long now) {
-  Bluefruit.Advertising.start(0);
-  bleSleeping = false;
-  bleIdleSince = now;
-  imuAwake();
-  wakeBuzz();
-  Serial.println("Bluetooth geweckt");
+// Doppelklopfen: weckt das Bluetooth und startet/stoppt den Panikmodus
+void onDoubleTap(unsigned long now) {
+  lastTapAt = now;
+  bool woke = false;
+  if (bleSleeping) {
+    Bluefruit.Advertising.start(0);
+    bleSleeping = false;
+    bleIdleSince = now;
+    woke = true;
+    Serial.println("Bluetooth geweckt");
+  }
+  if (panicEnabled) {
+    if (panicActive) stopPanic(now, false);
+    else             startPanic(now);
+  } else if (woke && haveDrv) {          // ohne Panikmodus: kurzes Doppelsurren als Bestätigung
+    buzz(110, 40); delay(80); buzz(110, 40);
+    signalDone();
+  }
 }
 
 // ==========================================================================
@@ -692,6 +954,12 @@ uint8_t readBatteryPercent() {
   uint8_t pct = lipoPercent(v);
   Serial.print("VBAT = "); Serial.print(v, 3); Serial.print(" V  -> "); Serial.print(pct); Serial.println(" %");
   return pct;
+}
+
+void updateBattery() {
+  uint8_t pct = readBatteryPercent();
+  blebas.write(pct);
+  if (Bluefruit.connected()) blebas.notify(pct);     // die Seite zeigt den Stand sofort an
 }
 
 // ==========================================================================
@@ -743,11 +1011,20 @@ void plan_write_cb(uint16_t conn_handle, BLECharacteristic* chr, uint8_t* data, 
   schedOn          = data[0] & 1;
   schedIntervalMin = (uint16_t)iv;
   schedDurationMin = (uint16_t)du;
+  if (len >= 8) {
+    announceStrength = data[5];
+    int th = data[6];
+    if (th < 1) th = 1;
+    if (th > 31) th = 31;
+    if (th != tapThs) { tapThs = (uint8_t)th; tapCfgDirty = true; }
+    panicEnabled = data[7] & 1;
+  }
   cfgDirty = true;
 }
 
 void connect_cb(uint16_t handle) {
   (void)handle;
+  batNextAt = 0;                         // Akkustand gleich beim Verbinden aktualisieren
   Serial.println("Verbunden");
 }
 
@@ -799,9 +1076,10 @@ void setup() {
   if (busFrei && imu.begin() == 0) {
     imuOk = true;
     configureIMU();
+    nrf_gpio_cfg_input(IMU_INT1_PIN, NRF_GPIO_PIN_NOPULL);   // Doppelklopf-Interrupt
     Serial.println("IMU ok");
   } else {
-    Serial.println("IMU nicht verfuegbar - Bluetooth bleibt immer auffindbar, ohne Bewegung");
+    Serial.println("IMU nicht verfuegbar - Bluetooth bleibt immer auffindbar, ohne Bewegung, Stillstand und Klopfen");
   }
 
   // DRV2605
@@ -876,13 +1154,14 @@ void setup() {
 
   planChar.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP);
   planChar.setPermission(SECMODE_OPEN, SECMODE_OPEN);
-  planChar.setFixedLen(5);
+  planChar.setMaxLen(8);
   planChar.setWriteCallback(plan_write_cb);
   planChar.begin();
-  uint8_t planInit[5] = { (uint8_t)(schedOn ? 1 : 0),
+  uint8_t planInit[8] = { (uint8_t)(schedOn ? 1 : 0),
                           (uint8_t)(schedIntervalMin & 0xFF), (uint8_t)(schedIntervalMin >> 8),
-                          (uint8_t)(schedDurationMin & 0xFF), (uint8_t)(schedDurationMin >> 8) };
-  planChar.write(planInit, 5);
+                          (uint8_t)(schedDurationMin & 0xFF), (uint8_t)(schedDurationMin >> 8),
+                          announceStrength, tapThs, (uint8_t)(panicEnabled ? 1 : 0) };
+  planChar.write(planInit, 8);
 
   startAdv();
   bleIdleSince = millis();
@@ -896,13 +1175,24 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
+  // Doppelklopfen (der Sensor meldet es per Interrupt, kein ständiges Nachfragen über I2C)
+  if (imuOk && nrf_gpio_pin_read(IMU_INT1_PIN)) {
+    uint8_t s = 0;
+    if (imu.readRegisters(REG_TAP_SRC, &s, 1) && (s & 0x10) && now - lastTapAt >= TAP_SPERRE_MS) {
+      onDoubleTap(now);
+      now = millis();
+      uint8_t clr = 0; imu.readRegisters(REG_TAP_SRC, &clr, 1);   // Latch sicher löschen
+    }
+  }
+  if (tapCfgDirty && imuOk) { tapCfgDirty = false; applyTapThreshold(); }
+
   scheduleUpdate(now);
   rhythmUpdate(now);
 
-  bool rhythmRuns = haveDrv && sessionActive && (heartOn || breathOn);
+  bool rhythmRuns = haveDrv && !panicActive && sessionActive && (heartOn || breathOn);
 
-  // Vibe: sofort auf Zielstärke, dann weich ausklingen (pausiert, solange Herz oder Atem laufen)
-  if (!rhythmRuns && now - lastVibeTick >= SAMPLE_MS) {
+  // Vibe: sofort auf Zielstärke, dann weich ausklingen (pausiert, solange Herz, Atem oder Panik laufen)
+  if (!rhythmRuns && !panicActive && now - lastVibeTick >= SAMPLE_MS) {
     lastVibeTick = now;
     if (currentVibe < targetVibe) {
       currentVibe = targetVibe;
@@ -915,7 +1205,7 @@ void loop() {
 
   // Timer
   if (vibeOffAt && now >= vibeOffAt) { targetVibe = 0; vibeOffAt = 0; }
-  if (now >= batNextAt) { batNextAt = now + BAT_MS; blebas.write(readBatteryPercent()); }
+  if (now >= batNextAt) { batNextAt = now + BAT_MS; updateBattery(); }
 
   // Konfiguration speichern (nach dem Trennen)
   if (savePending && !Bluefruit.connected()) {
@@ -931,13 +1221,6 @@ void loop() {
     bleSleep();
   }
 
-  // Doppelklopf weckt das Bluetooth
-  if (bleSleeping && imuOk && now - lastTapPoll >= TAP_POLL_MS) {
-    lastTapPoll = now;
-    uint8_t s = 0;
-    if (imu.readRegisters(REG_TAP_SRC, &s, 1) && (s & 0x10)) bleWake(now);
-  }
-
   // Statuszeile
   if (DEBUG_STATUS && now - lastStatusAt >= STATUS_MS) {
     lastStatusAt = now;
@@ -946,25 +1229,30 @@ void loop() {
     Serial.print(" drv="); Serial.print(haveDrv);
     Serial.print(" ble="); Serial.print(Bluefruit.connected() ? "verbunden" : (bleSleeping ? "schlaeft" : "werbend"));
     Serial.print(" session="); Serial.print(sessionActive);
-    Serial.print(" herz="); Serial.print(heartOn);
-    Serial.print(" atem="); Serial.print(breathOn);
-    Serial.print(" auto="); Serial.println(schedOn);
+    Serial.print(" auto="); Serial.print(schedOn);
+    Serial.print(" zustand="); Serial.print((int)schedState);
+    Serial.print(" panik="); Serial.println(panicActive);
   }
 
-  // IMU auslesen (nur wenn verbunden und IMU ok)
-  if (now - lastSampleAt >= SAMPLE_MS) {
+  // IMU auslesen: Bewegung (verbunden) und Stillstand (beim Warten auf die Session)
+  bool wantMotion = imuOk && (Bluefruit.connected() || schedState == SCH_WAIT);
+  if (wantMotion && now - lastSampleAt >= SAMPLE_MS) {
     lastSampleAt = now;
-    if (imuOk && Bluefruit.connected()) {
-      float ax = imu.readFloatAccelX();
-      float ay = imu.readFloatAccelY();
-      float az = imu.readFloatAccelZ();
+    float ax = imu.readFloatAccelX();
+    float ay = imu.readFloatAccelY();
+    float az = imu.readFloatAccelZ();
 
-      if (!primed) { pax = ax; pay = ay; paz = az; primed = true; }
-      else {
-        float dx = ax - pax, dy = ay - pay, dz = az - paz;
-        float delta = sqrt(dx * dx + dy * dy + dz * dz);
-        pax = ax; pay = ay; paz = az;
+    if (!primed) { pax = ax; pay = ay; paz = az; primed = true; }
+    else {
+      float dx = ax - pax, dy = ay - pay, dz = az - paz;
+      float delta = sqrt(dx * dx + dy * dy + dz * dz);
+      pax = ax; pay = ay; paz = az;
 
+      motionEma = 0.75f * motionEma + 0.25f * delta;
+      if (motionEma < STILL_DELTA) { if (!stillSince) stillSince = now; }
+      else stillSince = 0;
+
+      if (Bluefruit.connected()) {
         if (delta > NOISE_FLOOR) {
           int v = (int)(delta * 100.0 + 0.5);
           if (v > 255) v = 255;
@@ -977,10 +1265,16 @@ void loop() {
           wasMoving = false;
         }
       }
-    } else {
-      primed = false;
     }
+  } else if (!wantMotion) {
+    primed = false;
+    stillSince = 0;
+    motionEma = 1.0f;
   }
 
-  delay(rhythmRuns ? 5 : 10);
+  // Im Leerlauf lange schlafen (spart Strom), bei Rhythmus kurz (genaues Timing), beim Warten/Verbinden mittel
+  int dly = 50;
+  if (rhythmRuns || panicActive) dly = 5;
+  else if (Bluefruit.connected() || schedState == SCH_WAIT) dly = 20;
+  delay(dly);
 }

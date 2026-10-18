@@ -41,7 +41,7 @@
     Mit Verbindung läuft immer direkt das, was die Seite zeigt.
 
   Panikmodus
-    Zweimal auf das Gerät tippen startet ihn, zweimal tippen stoppt ihn (sonst nach 5 min Ende).
+    Dreimal auf das Gerät klopfen startet ihn, dreimal klopfen stoppt ihn (sonst nach 5 min Ende).
     Fester Rhythmus 4-7-8: 4 s einatmen, 7 s halten, 8 s ausatmen.
       Einatmen = dein Einatem-Muster, Halten = sehr leiser langsamer Herzschlag, Ausatmen = Herzschlag (langsamer werdend).
     Stärke und Muster kommen aus dem Programm, Stärke +20 %. Der Timer läuft unabhängig weiter;
@@ -942,7 +942,7 @@ void scheduleUpdate(unsigned long now) {
 void bleSleep() {
   Bluefruit.Advertising.stop();
   bleSleeping = true;
-  Serial.println("Bluetooth schlaeft - zweimal klopfen weckt");
+  Serial.println("Bluetooth schlaeft - dreimal klopfen weckt");
 }
 
 // Dreimal klopfen: weckt das Bluetooth und startet/stoppt den Panikmodus

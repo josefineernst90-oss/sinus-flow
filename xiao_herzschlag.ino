@@ -68,6 +68,12 @@ const bool DEBUG_STATUS = true;    // alle 2 s Statuszeile im Serial Monitor
 
 // ---- Pins ----
 #define IMU_INT1_PIN  11   // P0.11, intern mit LSM6DS3 INT1 verdrahtet
+// Dieselbe Leitung als Arduino-Pin (für attachInterrupt): Seeed nennt sie PIN_LSM6DS3TR_C_INT1 (= 18)
+#if defined(PIN_LSM6DS3TR_C_INT1)
+  #define IMU_INT1_ARDUINO PIN_LSM6DS3TR_C_INT1
+#else
+  #define IMU_INT1_ARDUINO 18
+#endif
 
 // ---- Zeitkonstanten ----
 const float         NOISE_FLOOR  = 0.05;    // g — darunter gilt es als Ruhe (Bewegungs-Notify)
@@ -274,6 +280,9 @@ volatile uint16_t windowEndMin   = 18 * 60;// Ende, Minuten seit 0:00 (Ende < Be
 volatile bool cfgDirty    = false;   // seit dem letzten Speichern geändert
 volatile bool savePending = false;   // beim Trennen gesetzt, loop() speichert
 volatile bool tapCfgDirty = false;   // Klopf-Härte muss in den Sensor geschrieben werden
+volatile bool tapFlag     = false;   // vom INT1-Interrupt gesetzt: der Sensor hat ein Doppelklopfen gemeldet
+
+void tapIsr() { tapFlag = true; }
 
 // ---- Zustand ----
 float pax = 0, pay = 0, paz = 0;
@@ -395,13 +404,13 @@ void loadConfig() {
 // IMU-Konfiguration
 // ==========================================================================
 void applyTapThreshold() {
-  imu.writeRegister(REG_TAP_THS_6D, tapThs & 0x1F);
+  imu.writeRegister(REG_TAP_THS_6D, 0x80 | (tapThs & 0x1F));   // Bit7 wie im erprobten Seeed-Beispiel
 }
 
 void configureIMU() {
   imu.writeRegister(REG_CTRL2_G,     0x00);            // Gyro aus
   imu.writeRegister(REG_CTRL1_XL,    0x60);            // Accel 416 Hz, ±2g (nötig für sichere Klopf-Erkennung)
-  imu.writeRegister(REG_TAP_CFG,     0x8F);            // Interrupts an, Tap X/Y/Z, Latch
+  imu.writeRegister(REG_TAP_CFG,     0x8E);            // Interrupts an, Tap X/Y/Z, ohne Latch (die Flanke fängt ein Interrupt auf)
   applyTapThreshold();
   imu.writeRegister(REG_INT_DUR2,    0x7F);            // Doppelklopf-Zeitfenster
   imu.writeRegister(REG_WAKE_UP_THS, 0x80);            // Doppelklopf aktiv
@@ -1130,6 +1139,11 @@ void setup() {
     imuOk = true;
     configureIMU();
     nrf_gpio_cfg_input(IMU_INT1_PIN, NRF_GPIO_PIN_NOPULL);   // Doppelklopf-Interrupt
+    pinMode(IMU_INT1_ARDUINO, INPUT);
+    attachInterrupt(IMU_INT1_ARDUINO, tapIsr, RISING);       // INT1 pulst nur kurz, darum Flanke statt Abfragen
+    delay(50);
+    { uint8_t clr = 0; imu.readRegisters(REG_TAP_SRC, &clr, 1); }
+    tapFlag = false;                                         // Störimpuls beim Einschalten verwerfen
     Serial.println("IMU ok");
   } else {
     Serial.println("IMU nicht verfuegbar - Bluetooth bleibt immer auffindbar, ohne Bewegung, Stillstand und Klopfen");
@@ -1238,12 +1252,21 @@ void loop() {
   unsigned long now = millis();
 
   // Doppelklopfen (der Sensor meldet es per Interrupt, kein ständiges Nachfragen über I2C)
-  if (imuOk && nrf_gpio_pin_read(IMU_INT1_PIN)) {
-    uint8_t s = 0;
-    if (imu.readRegisters(REG_TAP_SRC, &s, 1) && (s & 0x10) && now - lastTapAt >= TAP_SPERRE_MS) {
+  if (imuOk) {
+    bool tap = false;
+    if (tapFlag) {                                   // Flanke von INT1 (der Sensor meldet nur Doppelklopfen)
+      tapFlag = false;
+      tap = true;
+    } else if (nrf_gpio_pin_read(IMU_INT1_PIN)) {    // Pegel hoch: zur Sicherheit noch im Register nachsehen
+      uint8_t s = 0;
+      if (imu.readRegisters(REG_TAP_SRC, &s, 1) && (s & 0x10)) tap = true;
+    }
+    if (tap && now - lastTapAt >= TAP_SPERRE_MS) {
+      Serial.println("Doppelklopf erkannt");
       onDoubleTap(now);
       now = millis();
-      uint8_t clr = 0; imu.readRegisters(REG_TAP_SRC, &clr, 1);   // Latch sicher löschen
+      uint8_t clr = 0; imu.readRegisters(REG_TAP_SRC, &clr, 1);
+      tapFlag = false;
     }
   }
   if (tapCfgDirty && imuOk) { tapCfgDirty = false; applyTapThreshold(); }

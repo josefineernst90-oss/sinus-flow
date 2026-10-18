@@ -161,10 +161,13 @@
       <button class="chip" type="button" data-rate="26">Keuchen 26</button>
     </div>
     <div class="chips" role="group" aria-label="Muster beim Einatmen">
-      <button class="chip" type="button" data-style="0">Einatmen: Pulsfolge</button>
-      <button class="chip" type="button" data-style="1">Einatmen: Welle</button>
+      <button class="chip" type="button" data-style="0">Pulsfolge</button>
+      <button class="chip" type="button" data-style="1">Welle</button>
+      <button class="chip" type="button" data-style="2">Brandung</button>
+      <button class="chip" type="button" data-style="3">Klopfen</button>
+      <button class="chip" type="button" data-style="4">Rauschen</button>
     </div>
-    <p class="sub">Pulsfolge: kurze Taps, die dichter und stärker werden. Welle: weiches Anschwellen. Das Ausatmen ist still oder gehört dem Herzschlag.</p>
+    <p class="sub">Muster beim Einatmen. Pulsfolge: Taps, die dichter und stärker werden. Welle: weiches Anschwellen. Brandung: 2–3 lange weiche Wellen. Klopfen: wenige langsame, gleich starke Schläge. Rauschen: unregelmäßiges Grundrumpeln, das langsam lauter wird. Das Ausatmen ist still oder gehört dem Herzschlag.</p>
   </section>
 
   <!-- Automatik -->
@@ -197,9 +200,9 @@
 // ---- Gleiche Daten wie in der Firmware ----
 const SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
 const HEART_UUID   = "19b10003-e8f2-537e-4f6c-d104768a1214";   // [BPM, Stärke 0..255, An 0/1]
-const BREATH_UUID  = "19b10004-e8f2-537e-4f6c-d104768a1214";   // [Atemzüge/min, Stärke 0..255, An 0/1, Stil 0/1]
+const BREATH_UUID  = "19b10004-e8f2-537e-4f6c-d104768a1214";   // [Atemzüge/min, Stärke 0..255, An 0/1, Stil 0..4]
 const PLAN_UUID    = "19b10005-e8f2-537e-4f6c-d104768a1214";   // [Automatik 0/1, Intervall u16 LE, Dauer u16 LE]
-const S1_MS = 130, S2_MS = 100, S2_FAKTOR = 0.65;
+const S1_MS = 200, S2_MS = 150, S2_FAKTOR = 0.70;
 const ATEM_EINATMEN_ANTEIL = 0.40;
 const AUSATMEN_VERZOEGERUNG_MS = 60, AUS_F0 = 0.92, AUS_F1 = 1.08;
 
@@ -207,7 +210,7 @@ const $ = (id) => document.getElementById(id);
 const orb = $('orb'), lung = $('lung'), connectBtn = $('connect'), statusEl = $('status');
 
 let on = false, bpm = 60, strength = 60;               // Herz, Stärke in Prozent
-let bOn = false, rate = 12, bStrength = 70, style = 0; // Atem, Stärke in Prozent, Stil 0 = Pulsfolge, 1 = Welle
+let bOn = false, rate = 12, bStrength = 70, style = 0; // Atem, Stärke in Prozent, Stil 0 Pulsfolge, 1 Welle, 2 Brandung, 3 Klopfen, 4 Rauschen
 let sOn = false, iv = 30, du = 3;                      // Automatik
 let device = null, heartChar = null, breathChar = null, planChar = null;
 
@@ -221,7 +224,21 @@ function pulseEnv(t, dur) {
   const d = (1 - x) / 0.85;
   return d * d;
 }
-function gapFor(p) { return Math.min(320, Math.max(150, p * 0.33)); }
+// Hüllkurve mit Plateau (gleich wie auf der Biene)
+function heartEnv(t, dur) {
+  if (t < 0 || t >= dur) return 0;
+  const x = t / dur;
+  if (x < 0.12) return x / 0.12;
+  if (x < 0.50) return 1;
+  const d = (1 - x) / 0.50;
+  return d * d;
+}
+function gapFor(p) {
+  let g = Math.min(360, Math.max(230, p * 0.36));
+  const maxGap = p * 0.95;
+  if (maxGap > S2_MS && g + S2_MS > maxGap) g = maxGap - S2_MS;
+  return g;
+}
 
 let beatStart = 0, period = 1000, gap = 320;
 let vActive = false, vCycle = -1, vExS = 0, vExE = 0;
@@ -239,7 +256,7 @@ function heartFree(now) {
     if (now - next >= period) startBeatAt(now, 1);
   }
   const t = now - beatStart;
-  return pulseEnv(t, S1_MS) + S2_FAKTOR * pulseEnv(t - gap, S2_MS);
+  return heartEnv(t, S1_MS) + S2_FAKTOR * heartEnv(t - gap, S2_MS);
 }
 
 // ---- Atem-Takt ----
@@ -283,7 +300,7 @@ function heartExhale(now) {
   }
   if (!vActive) return 0;
   const t = now - beatStart;
-  return pulseEnv(t, S1_MS) + S2_FAKTOR * pulseEnv(t - gap, S2_MS);
+  return heartEnv(t, S1_MS) + S2_FAKTOR * heartEnv(t - gap, S2_MS);
 }
 
 // Herz neu einsetzen: mit Atmung erst im nächsten Ausatmen, sonst sofort
@@ -432,7 +449,7 @@ async function readState() {
       rate = d.getUint8(0);
       bStrength = Math.max(10, Math.min(100, Math.round(d.getUint8(1) / 255 * 100)));
       bOn = !!(d.getUint8(2) & 1);
-      if (d.byteLength >= 4) style = d.getUint8(3) ? 1 : 0;
+      if (d.byteLength >= 4) style = d.getUint8(3) <= 4 ? d.getUint8(3) : 0;
     }
   }
   if (planChar) {

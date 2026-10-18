@@ -12,8 +12,8 @@
     Motion-Char    19b10001-...  (Read | Notify)  uint8 = Bewegungsstärke (g*100, 0..255)
     Vibe-Char      19b10002-...  (Write)          uint8 = Vibrationsstärke (0..255)
     Herz-Char      19b10003-...  (Read | Write)   3 Byte = [BPM 30..180, Stärke 0..255, An 0/1]
-    Atem-Char      19b10004-...  (Read | Write)   4 Byte = [Atemzüge/min 4..30, Stärke 0..255, An 0/1, Stil 0/1]
-                                                  (Stil 0 = Pulsfolge, 1 = Welle; 3 Byte werden auch akzeptiert)
+    Atem-Char      19b10004-...  (Read | Write)   4 Byte = [Atemzüge/min 4..30, Stärke 0..255, An 0/1, Stil 0..4]
+                                                  (Stil 0 = Pulsfolge, 1 = Welle, 2 = Brandung, 3 = Klopfen, 4 = Rauschen; 3 Byte werden auch akzeptiert)
     Plan-Char      19b10005-...  (Read | Write)   5 Byte = [Automatik An 0/1, Intervall Min (u16 LE), Dauer Min (u16 LE)]
 
   DRV2605 (I2C 0x5A): VIN->3V3, GND->GND, SDA->D4, SCL->D5, Motor an die Motor-Ausgänge.
@@ -68,9 +68,10 @@ const int RTP_MIN = 30;    // kleinste spürbare Stärke
 const int RTP_MAX = 127;   // signed: 127 = Vollgas
 
 // ---- Herzschlag ----
-const unsigned long S1_MS     = 130;     // Dauer von "lub"
-const unsigned long S2_MS     = 100;     // Dauer von "dub"
-const float         S2_FAKTOR = 0.65f;   // "dub" ist leiser als "lub"
+const unsigned long S1_MS     = 200;     // Dauer von "lub" (ERM braucht ~40 ms zum Anlaufen, daher lang mit Plateau)
+const unsigned long S2_MS     = 150;     // Dauer von "dub"
+const float         S2_FAKTOR = 0.70f;   // "dub" ist leiser als "lub"
+const int           HERZ_MIN  = 50;      // kleinste Herz-Stärke (Stärke-Regler ganz unten), kräftiger als RTP_MIN
 
 // Anstoß + Gegenschub, damit der ERM-Motor knackig statt matschig schlägt
 const unsigned long KICK_MS      = 18;     // Anstoß-Dauer am Pulsbeginn
@@ -81,6 +82,9 @@ const float         BRAKE_FAKTOR = 0.5f;   // Bremse = 50 % der Stärke, negativ
 // ---- Atmung ----
 const float ATEM_EINATMEN_ANTEIL = 0.40f;  // 40 % Einatmen, 60 % Ausatmen
 const int   ATEM_MAX             = 110;    // höchste Atem-Stärke
+
+// Stile 2-4 bleiben in einem niedrigen Band, damit der Motor nicht "hochdreht" (Windrad-Effekt)
+const int ATEM_LOW_MAX = 95;       // höchste Stärke für Brandung / Klopfen / Rauschen
 
 // Stil 0: Pulsfolge — kurze Taps, die beim Einatmen dichter und stärker werden
 const float TAP_F0       = 2.5f;   // Taps pro Sekunde am Anfang des Einatmens
@@ -218,7 +222,7 @@ volatile bool     heartOn        = false;
 volatile uint8_t  breathRate     = 12;     // Atemzüge pro Minute
 volatile uint8_t  breathStrength = 120;
 volatile bool     breathOn       = false;
-volatile uint8_t  breathStyle    = 0;      // 0 = Pulsfolge, 1 = Welle
+volatile uint8_t  breathStyle    = 0;      // 0 Pulsfolge, 1 Welle, 2 Brandung, 3 Klopfen, 4 Rauschen
 volatile bool     schedOn        = false;  // Automatik
 volatile uint16_t schedIntervalMin = 30;   // alle X Minuten
 volatile uint16_t schedDurationMin = 3;    // für Y Minuten
@@ -299,7 +303,7 @@ void loadConfig() {
   breathRate = (uint8_t)rate;
   breathStrength = b[5];
   breathOn = b[6] & 1;
-  breathStyle = (b[7] > 1) ? 1 : b[7];
+  breathStyle = (b[7] > 4) ? 0 : b[7];
   schedOn = b[8] & 1;
   schedIntervalMin = (uint16_t)iv;
   schedDurationMin = (uint16_t)du;
@@ -354,10 +358,23 @@ static float pulseEnv(float t, float dur) {
   return d * d;
 }
 
+// Hüllkurve mit Plateau: schneller Anstieg, kurz halten, dann abklingen
+static float heartEnv(float t, float dur) {
+  if (t < 0 || t >= dur) return 0;
+  float x = t / dur;
+  if (x < 0.12f) return x / 0.12f;
+  if (x < 0.50f) return 1.0f;
+  float d = (1.0f - x) / 0.50f;
+  return d * d;
+}
+
+// Abstand lub -> dub
 static unsigned long gapFor(unsigned long period) {
-  unsigned long gap = (unsigned long)(period * 0.33f);
-  if (gap < 150) gap = 150;
-  if (gap > 320) gap = 320;
+  unsigned long gap = (unsigned long)(period * 0.36f);
+  if (gap < 230) gap = 230;
+  if (gap > 360) gap = 360;
+  unsigned long maxGap = (unsigned long)(period * 0.95f);
+  if (maxGap > S2_MS && gap + S2_MS > maxGap) gap = maxGap - S2_MS;   // bei sehr hohem Puls enger
   return gap;
 }
 
@@ -371,9 +388,9 @@ static void heartStartBeat(unsigned long startAt, float factor) {
 static int beatShape(unsigned long now) {
   float t   = (float)(now - beatStartAt);
   float tS2 = t - (float)beatGap;
-  int maxv = (heartStrength == 0) ? 0 : (int)map(heartStrength, 1, 255, RTP_MIN, RTP_MAX);
+  int maxv = (heartStrength == 0) ? 0 : (int)map(heartStrength, 1, 255, HERZ_MIN, RTP_MAX);
 
-  float v = pulseEnv(t, (float)S1_MS) + S2_FAKTOR * pulseEnv(tS2, (float)S2_MS);
+  float v = heartEnv(t, (float)S1_MS) + S2_FAKTOR * heartEnv(tS2, (float)S2_MS);
   int val = (int)(v * maxv + 0.5f);
 
   if (maxv > 0) {
@@ -440,8 +457,56 @@ static int heartExhale(unsigned long now, unsigned long cycleStart, long cycleId
 // Atmung: nur das Einatmen trägt ein Muster, das Ausatmen bleibt still
 static int breathInhale(unsigned long posMs, unsigned long inhaleMs) {
   if (breathStrength == 0) return 0;
-  int maxb = (int)map(breathStrength, 1, 255, RTP_MIN, ATEM_MAX);
   float x = (float)posMs / (float)inhaleMs;       // 0..1 im Einatmen
+
+  // ---- Stile 2-4: niedriges Band, kein Hochdrehen ----
+  if (breathStyle >= 2) {
+    int top = (int)map(breathStrength, 1, 255, RTP_MIN, ATEM_LOW_MAX);
+
+    if (breathStyle == 2) {
+      // Brandung: 2-3 lange, weiche Wellen, jede etwas voller als die vorige
+      int n = (inhaleMs >= 3000) ? 3 : 2;
+      float L = (float)inhaleMs / n;
+      int k = (int)((float)posMs / L);
+      if (k >= n) k = n - 1;
+      float u = ((float)posMs - k * L) / L;                         // 0..1 in der Welle
+      float env = 0.5f - 0.5f * cosf(2.0f * PI * u);                // 0 -> 1 -> 0
+      if (env < 0.03f) return 0;
+      float amp = top * (0.85f + 0.15f * (n > 1 ? (float)k / (n - 1) : 1.0f));
+      if (amp < RTP_MIN) amp = RTP_MIN;
+      return (int)(RTP_MIN + (amp - RTP_MIN) * env + 0.5f);
+    }
+
+    if (breathStyle == 3) {
+      // Klopfen: wenige langsame, gleich starke, weiche Schläge wie ein Takt auf der Brust
+      int n = (int)(inhaleMs / 700 + 0.5f);
+      if (n < 2) n = 2;
+      if (n > 4) n = 4;
+      float spacing = (float)inhaleMs / n;
+      float since = fmodf((float)posMs, spacing);                   // ms seit dem letzten Klopfen
+      const float KNOCK_MS = 90.0f;
+      float amp = (float)top * 0.85f;
+      if (amp < RTP_MIN) amp = RTP_MIN;
+      if (since < KNOCK_MS) {
+        int val = (int)(amp * heartEnv(since, KNOCK_MS) + 0.5f);
+        if (since < 14.0f) { int kick = (int)(amp * 1.25f); if (kick > RTP_MAX) kick = RTP_MAX; val = max(val, kick); }
+        return val;
+      }
+      if (since < KNOCK_MS + 10.0f) return -(int)(amp * 0.3f);
+      return 0;
+    }
+
+    // Rauschen: unregelmäßig moduliertes Grundrumpeln, das langsam lauter wird (wie Luftstrom)
+    float tS = (float)posMs / 1000.0f;
+    float nz = (sinf(2.0f * PI * 7.3f * tS) + sinf(2.0f * PI * 11.7f * tS + 1.3f) + sinf(2.0f * PI * 17.9f * tS + 2.1f)) / 3.0f;  // -1..1
+    nz = 0.5f + 0.5f * nz;                                          // 0..1
+    float env = 0.55f + 0.45f * (0.5f - 0.5f * cosf(PI * x));       // 0.55 -> 1
+    int v = (int)(top * env * (0.50f + 0.50f * nz) + 0.5f);
+    if (v < RTP_MIN) v = RTP_MIN;
+    return v;
+  }
+
+  int maxb = (int)map(breathStrength, 1, 255, RTP_MIN, ATEM_MAX);
 
   if (breathStyle == 1) {
     // Welle: weich ansteigend, am Ende des Einatmens abgeschnitten
@@ -662,7 +727,7 @@ void breath_write_cb(uint16_t conn_handle, BLECharacteristic* chr, uint8_t* data
   breathRate     = (uint8_t)rate;
   breathStrength = data[1];
   breathOn       = (data[2] & 1) && haveDrv;
-  if (len >= 4) breathStyle = (data[3] > 1) ? 1 : data[3];
+  if (len >= 4) breathStyle = (data[3] > 4) ? 0 : data[3];
   cfgDirty = true;
 }
 

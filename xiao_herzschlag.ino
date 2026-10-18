@@ -50,7 +50,7 @@
   Verbindung / Schlaf
     - Die Verbindung wird nie von der Biene getrennt.
     - Ohne Verbindung schläft nach 2 Minuten nur das Bluetooth (Werbung aus). Das Gerät selbst läuft weiter.
-    - Doppelklopfen weckt das Bluetooth (und startet zugleich den Panikmodus, falls an).
+    - Dreimal klopfen weckt das Bluetooth (und startet zugleich den Panikmodus, falls an).
     - Ohne funktionierende IMU kann nichts wecken, dann bleibt die Biene immer auffindbar.
 
   Konfiguration
@@ -85,7 +85,12 @@ const unsigned long SAMPLE_MS    = 40;      // ~25 Hz Abtastung
 const unsigned long VIBE_MS      = 350;     // Pulsdauer je Befehl
 const unsigned long BAT_MS       = 30000;   // Akku alle 30 s messen
 const unsigned long STATUS_MS    = 2000;    // Statuszeile
-const unsigned long TAP_SPERRE_MS = 1500;   // nach einem Doppelklopfen kurz keine neue Erkennung
+const unsigned long TAP_SPERRE_MS = 1500;   // nach erkanntem Dreifach-Klopfen kurz keine neue Erkennung
+const unsigned long TAP_MIN_GAP_MS  = 90;   // Klopfer, die näher beieinander liegen, zählen als einer (Nachschwingen)
+const unsigned long TAP_MAX_GAP_MS  = 700;  // so lange darf die Pause zwischen zwei Klopfern höchstens sein
+const unsigned long TAP_SERIE_MS    = 1800; // alle drei Klopfer müssen in dieser Zeit fallen
+const int           TAP_VIB_PLUS    = 10;   // während der Vibration gilt eine höhere Schwelle (Motor löst sonst selbst aus)
+const unsigned long TAP_NACHLAUF_MS = 300;  // nach Wechsel Vibration an/aus kurz keine Klopfer annehmen
 
 // ---- Bluetooth-Schlaf ----
 const unsigned long BLE_SLEEP_MS = 120000;  // 2 min ohne Verbindung -> Bluetooth schläft
@@ -142,7 +147,7 @@ const float         AUS_F1 = 1.08f;   // Schlagabstand am Ende (langsamer)
 
 // ---- LSM6DS3-Register ----
 #define REG_WHO_AM_I    0x0F
-#define REG_TAP_SRC     0x1C   // Bit4 = Doppelklopf erkannt (Lesen löscht den Latch)
+#define REG_TAP_SRC     0x1C   // Bit5 = Einzelklopfen, Bit4 = Doppelklopfen erkannt
 #define REG_CTRL1_XL    0x10
 #define REG_CTRL2_G     0x11
 #define REG_CTRL3_C     0x12
@@ -150,8 +155,8 @@ const float         AUS_F1 = 1.08f;   // Schlagabstand am Ende (langsamer)
 #define REG_TAP_CFG     0x58   // Bit7 = INTERRUPTS_ENABLE, Bit3..1 = Tap X/Y/Z, Bit0 = LIR (Latch)
 #define REG_TAP_THS_6D  0x59   // Bit4..0 = Klopf-Schwelle
 #define REG_INT_DUR2    0x5A   // DUR | QUIET | SHOCK
-#define REG_WAKE_UP_THS 0x5B   // Bit7 = Doppelklopf statt Einzelklopf
-#define REG_MD1_CFG     0x5E   // Bit3 = Doppelklopf auf INT1
+#define REG_WAKE_UP_THS 0x5B   // Bit7 = Einzel- und Doppelklopfen (0 = nur Einzelklopfen)
+#define REG_MD1_CFG     0x5E   // Bit6 = Einzelklopfen auf INT1, Bit3 = Doppelklopfen auf INT1
 
 // ---- Konfigurationsdatei ----
 #define CFG_FILE      "/cfg.bin"
@@ -166,7 +171,7 @@ const float         AUS_F1 = 1.08f;   // Schlagabstand am Ende (langsamer)
 // Bus, Versorgung (P1.08) und Anlaufzeit übernimmt die Seeed-Bibliothek "Seeed_Arduino_LSM6DS3".
 // Sie ist für genau dieses Board gemacht und läuft bei dir im Beispiel. Die Bibliothek
 // "Arduino_LSM6DS3" darf nicht daneben installiert sein (gleicher Dateiname LSM6DS3.h).
-// Die Auswertung (Registerwerte, Doppelklopfen) bleibt eigener Code.
+// Die Auswertung (Registerwerte, Klopfen) bleibt eigener Code.
 LSM6DS3 imuLib(I2C_MODE, 0x6A);
 
 class SimpleLSM6DS3 {
@@ -251,7 +256,7 @@ volatile uint16_t schedIntervalMin = 30;   // alle X Minuten
 volatile uint16_t schedDurationMin = 3;    // für Y Minuten
 volatile uint8_t  announceStrength = 200;  // Stärke von Ankündigung und Ende-Signal (0 = stumm)
 volatile uint8_t  tapThs         = 6;      // Klopf-Härte 1 (empfindlich) .. 31 (hart), je 62,5 mg
-volatile bool     panicEnabled   = true;   // Doppelklopfen startet den Panikmodus
+volatile bool     panicEnabled   = true;   // Dreimal klopfen startet den Panikmodus
 volatile bool     windowOn       = false;  // Automatik nur im Zeitfenster
 volatile uint16_t windowStartMin = 8 * 60; // Beginn, Minuten seit 0:00
 volatile uint16_t windowEndMin   = 18 * 60;// Ende, Minuten seit 0:00 (Ende < Beginn = über Mitternacht)
@@ -259,9 +264,17 @@ volatile uint16_t windowEndMin   = 18 * 60;// Ende, Minuten seit 0:00 (Ende < Be
 volatile bool cfgDirty    = false;   // seit dem letzten Speichern geändert
 volatile bool savePending = false;   // beim Trennen gesetzt, loop() speichert
 volatile bool tapCfgDirty = false;   // Klopf-Härte muss in den Sensor geschrieben werden
-volatile bool tapFlag     = false;   // vom INT1-Interrupt gesetzt: der Sensor hat ein Doppelklopfen gemeldet
+// Einzelklopfer: der Sensor meldet jeden per INT1, der Interrupt merkt sich den Zeitpunkt.
+// Dreimal klopfen wird in der Software aus drei Einzelklopfern gebaut (der Sensor kann nur 1x und 2x).
+volatile uint32_t tapStamp[8];
+volatile uint8_t  tapHead = 0;
+uint8_t           tapTail = 0;
+unsigned long     tapSeq[3];
+uint8_t           tapSeqN = 0;
+unsigned long     tapMuteUntil = 0;     // bis dahin werden Klopfer verworfen (Signale, Nachlauf)
+bool              tapHigh = false;      // höhere Schwelle, weil gerade der Motor läuft
 
-void tapIsr() { tapFlag = true; }
+void tapIsr() { tapStamp[tapHead & 7] = millis(); tapHead++; }
 
 // ---- Zustand ----
 float pax = 0, pay = 0, paz = 0;
@@ -383,7 +396,9 @@ void loadConfig() {
 // IMU-Konfiguration
 // ==========================================================================
 void applyTapThreshold() {
-  imu.writeRegister(REG_TAP_THS_6D, 0x80 | (tapThs & 0x1F));   // Bit7 wie im erprobten Seeed-Beispiel
+  int th = tapThs + (tapHigh ? TAP_VIB_PLUS : 0);
+  if (th > 31) th = 31;
+  imu.writeRegister(REG_TAP_THS_6D, 0x80 | (th & 0x1F));   // Bit7 wie im erprobten Seeed-Beispiel
 }
 
 void configureIMU() {
@@ -391,9 +406,9 @@ void configureIMU() {
   imu.writeRegister(REG_CTRL1_XL,    0x60);            // Accel 416 Hz, ±2g (nötig für sichere Klopf-Erkennung)
   imu.writeRegister(REG_TAP_CFG,     0x8E);            // Interrupts an, Tap X/Y/Z, ohne Latch (die Flanke fängt ein Interrupt auf)
   applyTapThreshold();
-  imu.writeRegister(REG_INT_DUR2,    0x7F);            // Doppelklopf-Zeitfenster
-  imu.writeRegister(REG_WAKE_UP_THS, 0x80);            // Doppelklopf aktiv
-  imu.writeRegister(REG_MD1_CFG,     0x08);            // Doppelklopf auf INT1
+  imu.writeRegister(REG_INT_DUR2,    0x7F);            // Klopf-Zeitfenster (Schock/Ruhe)
+  imu.writeRegister(REG_WAKE_UP_THS, 0x00);            // nur Einzelklopfen (Dreifach baut die Software)
+  imu.writeRegister(REG_MD1_CFG,     0x40);            // Einzelklopfen auf INT1
   uint8_t s = 0;
   imu.readRegisters(REG_TAP_SRC, &s, 1);               // alten Latch löschen
 }
@@ -681,7 +696,12 @@ static void beatBlocking(int maxv, unsigned long period) {
   if (period > used) delay(period - used);
 }
 
-static void signalDone() { lastRhythmVal = -1000; }
+static void signalDone() {
+  lastRhythmVal = -1000;
+  tapTail = tapHead;                          // Klopfer während des Signals stammen vom Motor
+  tapSeqN = 0;
+  tapMuteUntil = millis() + TAP_NACHLAUF_MS;
+}
 
 // Ankündigung: zwei kräftige Schläge
 void announceSignal() {
@@ -917,7 +937,7 @@ void scheduleUpdate(unsigned long now) {
 }
 
 // ==========================================================================
-// Bluetooth-Schlaf / Doppelklopfen
+// Bluetooth-Schlaf / Dreifach-Klopfen
 // ==========================================================================
 void bleSleep() {
   Bluefruit.Advertising.stop();
@@ -925,8 +945,8 @@ void bleSleep() {
   Serial.println("Bluetooth schlaeft - zweimal klopfen weckt");
 }
 
-// Doppelklopfen: weckt das Bluetooth und startet/stoppt den Panikmodus
-void onDoubleTap(unsigned long now) {
+// Dreimal klopfen: weckt das Bluetooth und startet/stoppt den Panikmodus
+void onTripleTap(unsigned long now) {
   lastTapAt = now;
   bool woke = false;
   if (bleSleeping) {
@@ -1105,7 +1125,7 @@ bool initImu() {
   if (erg == 0) {
     imuOk = true;
     configureIMU();
-    nrf_gpio_cfg_input(IMU_INT1_PIN, NRF_GPIO_PIN_NOPULL);   // Doppelklopf-Interrupt
+    nrf_gpio_cfg_input(IMU_INT1_PIN, NRF_GPIO_PIN_NOPULL);   // Klopf-Interrupt
     if (!imuIsrAttached) {
       pinMode(IMU_INT1_ARDUINO, INPUT);
       attachInterrupt(IMU_INT1_ARDUINO, tapIsr, RISING);     // INT1 pulst nur kurz, darum Flanke statt Abfragen
@@ -1113,7 +1133,7 @@ bool initImu() {
     }
     delay(50);
     { uint8_t clr = 0; imu.readRegisters(REG_TAP_SRC, &clr, 1); }
-    tapFlag = false;                                         // Störimpuls beim Einschalten verwerfen
+    tapTail = tapHead;                                       // Störimpuls beim Einschalten verwerfen
     Serial.println("IMU ok");
     return true;
   }
@@ -1238,28 +1258,52 @@ void setup() {
 // ==========================================================================
 // loop
 // ==========================================================================
+// Einzelklopfer auswerten: drei in Folge = Dreifach-Klopfen
+// ==========================================================================
+void processTaps(unsigned long now) {
+  if ((uint8_t)(tapHead - tapTail) > 8) tapTail = (uint8_t)(tapHead - 8);   // Überlauf: nur die letzten 8
+  while (tapTail != tapHead) {
+    unsigned long t = tapStamp[tapTail & 7];
+    tapTail++;
+    if ((long)(t - tapMuteUntil) < 0) continue;                        // Sperrzeit
+    if (tapSeqN > 0) {
+      unsigned long d = t - tapSeq[tapSeqN - 1];
+      if (d < TAP_MIN_GAP_MS) continue;                                // Nachschwingen
+      if (d > TAP_MAX_GAP_MS) tapSeqN = 0;                             // zu lange Pause: neue Folge
+    }
+    tapSeq[tapSeqN++] = t;
+    Serial.print("Klopfer "); Serial.println(tapSeqN);
+    if (tapSeqN == 3) {
+      bool ok = (tapSeq[2] - tapSeq[0] <= TAP_SERIE_MS);
+      tapSeqN = 0;
+      if (ok && now - lastTapAt >= TAP_SPERRE_MS) {
+        Serial.println("Dreifach-Klopfen erkannt");
+        onTripleTap(now);
+        tapTail = tapHead;                                             // alles Weitere ist Nachschwingen oder Motor
+        tapMuteUntil = millis() + TAP_NACHLAUF_MS;
+        break;
+      }
+    }
+  }
+}
+
+// ==========================================================================
 void loop() {
   unsigned long now = millis();
 
-  // Doppelklopfen (der Sensor meldet es per Interrupt, kein ständiges Nachfragen über I2C)
+  // Klopfen: Läuft der Motor, gilt eine höhere Schwelle, sonst löst die Vibration sich selbst aus
   if (imuOk) {
-    bool tap = false;
-    if (tapFlag) {                                   // Flanke von INT1 (der Sensor meldet nur Doppelklopfen)
-      tapFlag = false;
-      tap = true;
-    } else if (nrf_gpio_pin_read(IMU_INT1_PIN)) {    // Pegel hoch: zur Sicherheit noch im Register nachsehen
-      uint8_t s = 0;
-      if (imu.readRegisters(REG_TAP_SRC, &s, 1) && (s & 0x10)) tap = true;
+    bool vibNow = haveDrv && (panicActive || (sessionActive && (heartOn || breathOn)) || currentVibe > 0);
+    if (vibNow != tapHigh) {
+      tapHigh = vibNow;
+      tapCfgDirty = true;
+      tapSeqN = 0;
+      tapMuteUntil = now + TAP_NACHLAUF_MS;
     }
-    if (tap && now - lastTapAt >= TAP_SPERRE_MS) {
-      Serial.println("Doppelklopf erkannt");
-      onDoubleTap(now);
-      now = millis();
-      uint8_t clr = 0; imu.readRegisters(REG_TAP_SRC, &clr, 1);
-      tapFlag = false;
-    }
+    if (tapCfgDirty) { tapCfgDirty = false; applyTapThreshold(); }
+    processTaps(now);
+    now = millis();
   }
-  if (tapCfgDirty && imuOk) { tapCfgDirty = false; applyTapThreshold(); }
 
   scheduleUpdate(now);
   rhythmUpdate(now);

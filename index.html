@@ -217,16 +217,16 @@
   <section class="panel auto" aria-label="Panikmodus">
     <h2>Panikmodus</h2>
     <button class="btn switch" id="pn" type="button" aria-pressed="true">
-      <span>Zweimal auf das Gerät tippen startet ihn</span><span class="state" id="pnState">An</span>
+      <span>Dreimal auf das Gerät klopfen startet ihn</span><span class="state" id="pnState">An</span>
     </button>
     <div class="row">
       <label for="ths">Klopf-Härte <output id="thsOut">6</output></label>
-      <input id="ths" type="range" min="2" max="20" step="1" value="6">
+      <input id="ths" type="range" min="2" max="31" step="1" value="6">
     </div>
-    <p class="sub">Fester Rhythmus 4-7-8: 4 s einatmen, 7 s halten, 8 s ausatmen. Einatmen mit deinem Atem-Muster, beim Halten ein leiser langsamer Herzschlag, beim Ausatmen der Herzschlag. Stärke wie im Programm, etwas kräftiger. Zweimal tippen stoppt ihn, sonst endet er nach 5 min. Der Timer läuft unabhängig weiter, hat aber hinten an. Kleiner = empfindlicher: Löst es beim Gehen von selbst aus, den Wert erhöhen. Tippen weckt außerdem das Bluetooth.</p>
+    <p class="sub">Fester Rhythmus 4-7-8: 4 s einatmen, 7 s halten, 8 s ausatmen. Einatmen mit deinem Atem-Muster, beim Halten ein leiser langsamer Herzschlag, beim Ausatmen der Herzschlag. Stärke wie im Programm, etwas kräftiger. Dreimal klopfen (zügig hintereinander) startet ihn, dreimal klopfen stoppt ihn, sonst endet er nach 5 min. Der Timer läuft unabhängig weiter, hat aber hinten an. Kleiner = empfindlicher: Löst es beim Gehen von selbst aus, den Wert erhöhen. Solange der Motor läuft, gilt automatisch eine höhere Schwelle, damit sich die Vibration nicht selbst auslöst. Klopfen weckt außerdem das Bluetooth.</p>
   </section>
 
-  <div class="hint">Tippe die Kugeln zum Starten und Stoppen. Solange du verbunden bist, spürst du direkt, was hier eingestellt ist. Die Kugeln zeigen den Rhythmus: Die Atem-Kugel schwillt beim Einatmen, die Herz-Kugel schlägt im Ausatmen. Ist die Biene nach 2 Minuten ohne Verbindung nicht mehr zu finden: zweimal klopfen weckt das Bluetooth. Funktioniert in Chrome oder Edge.</div>
+  <div class="hint">Tippe die Kugeln zum Starten und Stoppen. Solange du verbunden bist, spürst du direkt, was hier eingestellt ist. Die Kugeln zeigen den Rhythmus: Die Atem-Kugel schwillt beim Einatmen, die Herz-Kugel schlägt im Ausatmen. Ist die Biene nach 2 Minuten ohne Verbindung nicht mehr zu finden: dreimal klopfen weckt das Bluetooth. Funktioniert in Chrome oder Edge.</div>
 </main>
 
 <script>
@@ -247,7 +247,7 @@ let on = false, bpm = 60, strength = 60;               // Herz, Stärke in Proze
 let bOn = false, rate = 12, bStrength = 70, style = 0; // Atem, Stärke in Prozent, Stil 0 Pulsfolge, 1 Welle, 2 Brandung, 3 Klopfen, 4 Rauschen
 let sOn = false, iv = 30, du = 3;                      // Automatik
 let wOn = false, wFrom = 8 * 60, wTo = 18 * 60;        // Zeitfenster, Minuten seit 0:00
-let ann = 80, panicOn = true, ths = 6;                 // Ankündigung in Prozent, Panikmodus per Doppelklopfen, Klopf-Härte
+let ann = 80, panicOn = true, ths = 6;                 // Ankündigung in Prozent, Panikmodus per Dreifach-Klopfen, Klopf-Härte
 let device = null, heartChar = null, breathChar = null, planChar = null, timeChar = null;
 let battChar = null, battTimer = null;
 
@@ -532,7 +532,7 @@ async function readState() {
     }
     if (d.byteLength >= 8) {
       ann = Math.round(d.getUint8(5) / 255 * 100);
-      ths = Math.max(2, Math.min(20, d.getUint8(6) || 6));
+      ths = Math.max(2, Math.min(31, d.getUint8(6) || 6));
       panicOn = !!(d.getUint8(7) & 1);
     }
     if (d.byteLength >= 13) {

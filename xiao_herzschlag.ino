@@ -172,21 +172,106 @@ static void imuPower(bool on) {
   if (on) nrf_gpio_pin_set(IMU_POWER_RAW_PIN); else nrf_gpio_pin_clear(IMU_POWER_RAW_PIN);
 }
 
+// ---- Software-I2C auf den Rohpins des Sensors ----
+// Der Sensor sitzt auf eigenen Pins (P0.07 = SDA, P0.27 = SCL). Welches Wire-Objekt dorthin zeigt,
+// hängt von der Board-Definition ab. Dieser Bitbang-Bus braucht keine und läuft mit jeder.
+#define IMU_SDA_RAW 7     // P0.07
+#define IMU_SCL_RAW 27    // P0.27
+class SoftI2C {
+public:
+  void begin(uint32_t sda, uint32_t scl) {
+    _sda = sda; _scl = scl;
+    nrf_gpio_cfg(_sda, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_CONNECT, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_S0D1, NRF_GPIO_PIN_NOSENSE);
+    nrf_gpio_cfg(_scl, NRF_GPIO_PIN_DIR_OUTPUT, NRF_GPIO_PIN_INPUT_CONNECT, NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_S0D1, NRF_GPIO_PIN_NOSENSE);
+    nrf_gpio_pin_set(_sda); nrf_gpio_pin_set(_scl);
+    delayMicroseconds(10);
+  }
+  bool busFree() { return nrf_gpio_pin_read(_sda) && nrf_gpio_pin_read(_scl); }
+
+  bool write(uint8_t addr, const uint8_t* d, uint8_t n, bool stop) {
+    start();
+    bool ok = sendByte((uint8_t)(addr << 1));
+    for (uint8_t i = 0; ok && i < n; i++) ok = sendByte(d[i]);
+    if (stop || !ok) stopBit();
+    return ok;
+  }
+  bool readBlock(uint8_t addr, uint8_t* d, uint8_t n) {     // setzt voraus: vorher write(..., stop=false)
+    start();                                                 // wiederholter Start
+    if (!sendByte((uint8_t)((addr << 1) | 1))) { stopBit(); return false; }
+    for (uint8_t i = 0; i < n; i++) d[i] = recvByte(i < n - 1);
+    stopBit();
+    return true;
+  }
+private:
+  uint32_t _sda = IMU_SDA_RAW, _scl = IMU_SCL_RAW;
+  static void dly() { delayMicroseconds(4); }
+  void sdaHi() { nrf_gpio_pin_set(_sda); }
+  void sdaLo() { nrf_gpio_pin_clear(_sda); }
+  void sclHi() { nrf_gpio_pin_set(_scl); dly(); }
+  void sclLo() { nrf_gpio_pin_clear(_scl); }
+  void start() { sdaHi(); sclHi(); sdaLo(); dly(); sclLo(); }
+  void stopBit() { sdaLo(); dly(); sclHi(); sdaHi(); dly(); }
+  bool sendByte(uint8_t b) {
+    for (int i = 7; i >= 0; i--) {
+      if (b & (1 << i)) sdaHi(); else sdaLo();
+      dly(); sclHi(); sclLo();
+    }
+    sdaHi(); dly(); sclHi();
+    bool ack = !nrf_gpio_pin_read(_sda);                    // Gegenstelle zieht SDA tief = ACK
+    sclLo();
+    return ack;
+  }
+  uint8_t recvByte(bool ack) {
+    uint8_t b = 0;
+    sdaHi();
+    for (int i = 0; i < 8; i++) {
+      dly(); sclHi();
+      b = (uint8_t)((b << 1) | (nrf_gpio_pin_read(_sda) ? 1 : 0));
+      sclLo();
+    }
+    if (ack) sdaLo(); else sdaHi();
+    dly(); sclHi(); sclLo(); sdaHi();
+    return b;
+  }
+};
+SoftI2C softBus;
+
+// Diagnose: was haben die einzelnen Wege beim Suchen des Sensors gemeldet (-1 = keine Antwort, sonst WHO_AM_I)
+int imuDiagW0 = -2, imuDiagW1 = -2, imuDiagSoft = -2;
+
 // ---- Minimaler LSM6DS3-Treiber ----
 class SimpleLSM6DS3 {
 public:
-  SimpleLSM6DS3(uint8_t addr) : _addr(addr), _wire(&Wire) {}
+  SimpleLSM6DS3(uint8_t addr) : _addr(addr), _wire(&Wire), _soft(nullptr) {}
 
   int begin() {
     imuPower(false);
     delay(30);
     imuPower(true);
     delay(100);
-    if (probe(&Wire)) { _wire = &Wire; }
+    _soft = nullptr;
+    imuDiagW0 = imuDiagW1 = imuDiagSoft = -2;
+    int id = probeId(&Wire);
+    imuDiagW0 = id;
+    if (isImuId(id)) { _wire = &Wire; }
+    else {
 #if defined(PIN_WIRE1_SDA)
-    else if (probe(&Wire1)) { _wire = &Wire1; }
+      id = probeId(&Wire1);
+      imuDiagW1 = id;
+      if (isImuId(id)) _wire = &Wire1;
+      else
 #endif
-    else return -1;
+      {
+#if defined(PIN_WIRE1_SDA)
+        Wire1.end();                                    // Pins von der Hardware-I2C freigeben
+#endif
+        softBus.begin(IMU_SDA_RAW, IMU_SCL_RAW);        // letzter Weg: Software-I2C auf den Rohpins
+        _soft = &softBus;
+        id = readWhoAmI();
+        imuDiagSoft = id;
+        if (!isImuId(id)) { _soft = nullptr; return -1; }
+      }
+    }
 
     writeRegister(REG_CTRL3_C, 0x01);   // Software-Reset
     delay(20);
@@ -195,6 +280,7 @@ public:
   }
 
   bool writeRegister(uint8_t reg, uint8_t val) {
+    if (_soft) { uint8_t b[2] = { reg, val }; return _soft->write(_addr, b, 2, true); }
     _wire->beginTransmission(_addr);
     _wire->write(reg);
     _wire->write(val);
@@ -202,6 +288,7 @@ public:
   }
 
   bool readRegisters(uint8_t reg, uint8_t* buf, uint8_t len) {
+    if (_soft) return _soft->write(_addr, &reg, 1, false) && _soft->readBlock(_addr, buf, len);
     _wire->beginTransmission(_addr);
     _wire->write(reg);
     if (_wire->endTransmission(false) != 0) return false;
@@ -217,15 +304,22 @@ public:
 private:
   uint8_t   _addr;
   TwoWire*  _wire;
+  SoftI2C*  _soft;
 
-  bool probe(TwoWire* w) {
+  static bool isImuId(int id) { return id == 0x69 || id == 0x6A || id == 0x6B; }
+
+  int readWhoAmI() {                                   // WHO_AM_I lesen, -1 = keine Antwort
+    uint8_t id = 0;
+    return readRegisters(REG_WHO_AM_I, &id, 1) ? (int)id : -1;
+  }
+
+  int probeId(TwoWire* w) {
     w->begin();
     w->beginTransmission(_addr);
     w->write((uint8_t)REG_WHO_AM_I);
-    if (w->endTransmission(false) != 0) return false;
-    if (w->requestFrom(_addr, (uint8_t)1) != 1) return false;
-    uint8_t id = w->read();
-    return (id == 0x69 || id == 0x6A || id == 0x6B);
+    if (w->endTransmission(false) != 0) return -1;
+    if (w->requestFrom(_addr, (uint8_t)1) != 1) return -1;
+    return (int)w->read();
   }
 
   float readAxis(uint8_t offset) {
@@ -1121,23 +1215,14 @@ void startAdv() {
 }
 
 // ==========================================================================
-// setup
+// IMU suchen und einrichten (beim Start und, falls nichts gefunden wurde, alle 10 s erneut)
 // ==========================================================================
-void setup() {
-  // LEDs aus (active-low) und nie mehr angefasst
-  pinMode(LED_BLUE, OUTPUT);    digitalWrite(LED_BLUE, HIGH);
-  pinMode(LED_BUILTIN, OUTPUT); digitalWrite(LED_BUILTIN, HIGH);
+bool imuIsrAttached = false;
+bool imuBusFrei     = true;
+unsigned long imuRetryAt = 0;
 
-  Serial.begin(115200);
-  uint32_t t0 = millis();
-  while (!Serial && millis() - t0 < 1000) delay(10);
-  Serial.println("== XiaoSwitch Start ==");
-
-  InternalFS.begin();
-  loadConfig();
-
-  // IMU: erst einschalten, dann prüfen, ob der interne Bus frei ist (sonst hängt Wire1).
-  // Ohne Versorgung hält der Sensor die Leitungen tief, das sah vorher wie ein belegter Bus aus.
+bool initImu() {
+  // Erst einschalten, dann den Bus prüfen: ohne Versorgung hält der Sensor die Leitungen tief.
   imuOk = false;
   imuPower(true);
   delay(100);
@@ -1161,28 +1246,58 @@ void setup() {
     delay(5);
     busFrei = digitalRead(PIN_WIRE1_SDA) && digitalRead(PIN_WIRE1_SCL);
   }
-  Serial.print("IMU-Bus frei: "); Serial.println(busFrei ? "ja" : "nein");
 #else
-  bool busFrei = true;
+  softBus.begin(IMU_SDA_RAW, IMU_SCL_RAW);
+  bool busFrei = softBus.busFree();
 #endif
-  int imuErg = -1;
-  for (int versuch = 0; busFrei && versuch < 3 && imuErg != 0; versuch++) {
-    imuErg = imu.begin();
-    if (imuErg != 0) delay(100);
+  imuBusFrei = busFrei;
+  Serial.print("IMU-Bus frei: "); Serial.println(busFrei ? "ja" : "nein");
+
+  int erg = -1;
+  for (int versuch = 0; busFrei && versuch < 3 && erg != 0; versuch++) {
+    erg = imu.begin();
+    if (erg != 0) delay(100);
   }
-  if (busFrei && imuErg == 0) {
+  Serial.print("IMU-Suche: Wire="); Serial.print(imuDiagW0);
+  Serial.print(" Wire1="); Serial.print(imuDiagW1);
+  Serial.print(" Soft="); Serial.println(imuDiagSoft);
+
+  if (busFrei && erg == 0) {
     imuOk = true;
     configureIMU();
     nrf_gpio_cfg_input(IMU_INT1_PIN, NRF_GPIO_PIN_NOPULL);   // Doppelklopf-Interrupt
-    pinMode(IMU_INT1_ARDUINO, INPUT);
-    attachInterrupt(IMU_INT1_ARDUINO, tapIsr, RISING);       // INT1 pulst nur kurz, darum Flanke statt Abfragen
+    if (!imuIsrAttached) {
+      pinMode(IMU_INT1_ARDUINO, INPUT);
+      attachInterrupt(IMU_INT1_ARDUINO, tapIsr, RISING);     // INT1 pulst nur kurz, darum Flanke statt Abfragen
+      imuIsrAttached = true;
+    }
     delay(50);
     { uint8_t clr = 0; imu.readRegisters(REG_TAP_SRC, &clr, 1); }
     tapFlag = false;                                         // Störimpuls beim Einschalten verwerfen
     Serial.println("IMU ok");
-  } else {
-    Serial.println("IMU nicht verfuegbar - Bluetooth bleibt immer auffindbar, ohne Bewegungsanzeige und Klopfen");
+    return true;
   }
+  Serial.println("IMU nicht verfuegbar - Bluetooth bleibt immer auffindbar, ohne Bewegungsanzeige und Klopfen");
+  return false;
+}
+
+// ==========================================================================
+// setup
+// ==========================================================================
+void setup() {
+  // LEDs aus (active-low) und nie mehr angefasst
+  pinMode(LED_BLUE, OUTPUT);    digitalWrite(LED_BLUE, HIGH);
+  pinMode(LED_BUILTIN, OUTPUT); digitalWrite(LED_BUILTIN, HIGH);
+
+  Serial.begin(115200);
+  uint32_t t0 = millis();
+  while (!Serial && millis() - t0 < 1000) delay(10);
+  Serial.println("== XiaoSwitch Start ==");
+
+  InternalFS.begin();
+  loadConfig();
+
+  initImu();
 
   // DRV2605
   if (drv.begin()) {
@@ -1341,6 +1456,12 @@ void loop() {
     bleSleep();
   }
 
+  // Sensor nicht gefunden: alle 10 s erneut suchen (nur wenn gerade nichts vibriert und niemand verbunden ist)
+  if (!imuOk && now >= imuRetryAt) {
+    imuRetryAt = now + 10000UL;
+    if (!rhythmRuns && !panicActive && !Bluefruit.connected()) initImu();
+  }
+
   // Statuszeile
   if (DEBUG_STATUS && now - lastStatusAt >= STATUS_MS) {
     lastStatusAt = now;
@@ -1353,7 +1474,14 @@ void loop() {
     Serial.print(" zustand="); Serial.print((int)schedState);
     Serial.print(" uhr="); if (clockValid) Serial.print(clockSec / 60); else Serial.print("?");
     Serial.print(" fenster="); Serial.print(inWindow());
-    Serial.print(" panik="); Serial.println(panicActive);
+    Serial.print(" panik="); Serial.print(panicActive);
+    if (!imuOk) {
+      Serial.print(" imuBus="); Serial.print(imuBusFrei);
+      Serial.print(" W="); Serial.print(imuDiagW0);
+      Serial.print(" W1="); Serial.print(imuDiagW1);
+      Serial.print(" Soft="); Serial.print(imuDiagSoft);
+    }
+    Serial.println();
   }
 
   // IMU auslesen: Bewegung (nur verbunden, für die Anzeige in der Seite)

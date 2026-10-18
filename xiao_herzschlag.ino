@@ -158,19 +158,30 @@ const float         AUS_F1 = 1.08f;   // Schlagabstand am Ende (langsamer)
 #define CFG_MAGIC_OLD 0xA8     // 13 Byte (ohne Ankündigung/Panik/Zeitfenster)
 #define CFG_LEN_OLD   13
 
+// ---- IMU-Versorgung ----
+// Der Sensor hängt an P1.08 (Seeed: "lsm6ds3tr_c_en", aktiv high). Ohne Spannung antwortet er nicht,
+// und seine Busleitungen liegen dann tief. Darum wird er hier direkt per Portnummer eingeschaltet,
+// unabhängig davon, ob die Board-Definition ein Makro dafür kennt.
+#define IMU_POWER_RAW_PIN 40   // P1.08 = 32 + 8
+static void imuPower(bool on) {
+#if defined(PIN_LSM6DS3TR_C_POWER)
+  pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
+  digitalWrite(PIN_LSM6DS3TR_C_POWER, on ? HIGH : LOW);
+#endif
+  nrf_gpio_cfg_output(IMU_POWER_RAW_PIN);
+  if (on) nrf_gpio_pin_set(IMU_POWER_RAW_PIN); else nrf_gpio_pin_clear(IMU_POWER_RAW_PIN);
+}
+
 // ---- Minimaler LSM6DS3-Treiber ----
 class SimpleLSM6DS3 {
 public:
   SimpleLSM6DS3(uint8_t addr) : _addr(addr), _wire(&Wire) {}
 
   int begin() {
-#if defined(PIN_LSM6DS3TR_C_POWER)
-    pinMode(PIN_LSM6DS3TR_C_POWER, OUTPUT);
-    digitalWrite(PIN_LSM6DS3TR_C_POWER, LOW);
+    imuPower(false);
     delay(30);
-    digitalWrite(PIN_LSM6DS3TR_C_POWER, HIGH);
+    imuPower(true);
     delay(100);
-#endif
     if (probe(&Wire)) { _wire = &Wire; }
 #if defined(PIN_WIRE1_SDA)
     else if (probe(&Wire1)) { _wire = &Wire1; }
@@ -1125,17 +1136,41 @@ void setup() {
   InternalFS.begin();
   loadConfig();
 
-  // IMU nur ansprechen, wenn der interne Bus frei ist (sonst hängt Wire1)
+  // IMU: erst einschalten, dann prüfen, ob der interne Bus frei ist (sonst hängt Wire1).
+  // Ohne Versorgung hält der Sensor die Leitungen tief, das sah vorher wie ein belegter Bus aus.
   imuOk = false;
+  imuPower(true);
+  delay(100);
 #if defined(PIN_WIRE1_SDA) && defined(PIN_WIRE1_SCL)
   pinMode(PIN_WIRE1_SDA, INPUT_PULLUP);
   pinMode(PIN_WIRE1_SCL, INPUT_PULLUP);
   delay(5);
   bool busFrei = digitalRead(PIN_WIRE1_SDA) && digitalRead(PIN_WIRE1_SCL);
+  if (!busFrei) {                                  // hängender Bus: neun Takte und ein Stopp lösen ihn meist
+    pinMode(PIN_WIRE1_SCL, OUTPUT);
+    for (int i = 0; i < 9; i++) {
+      digitalWrite(PIN_WIRE1_SCL, LOW);  delayMicroseconds(5);
+      digitalWrite(PIN_WIRE1_SCL, HIGH); delayMicroseconds(5);
+    }
+    pinMode(PIN_WIRE1_SDA, OUTPUT);
+    digitalWrite(PIN_WIRE1_SDA, LOW);  delayMicroseconds(5);
+    digitalWrite(PIN_WIRE1_SCL, HIGH); delayMicroseconds(5);
+    digitalWrite(PIN_WIRE1_SDA, HIGH); delayMicroseconds(5);
+    pinMode(PIN_WIRE1_SDA, INPUT_PULLUP);
+    pinMode(PIN_WIRE1_SCL, INPUT_PULLUP);
+    delay(5);
+    busFrei = digitalRead(PIN_WIRE1_SDA) && digitalRead(PIN_WIRE1_SCL);
+  }
+  Serial.print("IMU-Bus frei: "); Serial.println(busFrei ? "ja" : "nein");
 #else
   bool busFrei = true;
 #endif
-  if (busFrei && imu.begin() == 0) {
+  int imuErg = -1;
+  for (int versuch = 0; busFrei && versuch < 3 && imuErg != 0; versuch++) {
+    imuErg = imu.begin();
+    if (imuErg != 0) delay(100);
+  }
+  if (busFrei && imuErg == 0) {
     imuOk = true;
     configureIMU();
     nrf_gpio_cfg_input(IMU_INT1_PIN, NRF_GPIO_PIN_NOPULL);   // Doppelklopf-Interrupt
@@ -1146,7 +1181,7 @@ void setup() {
     tapFlag = false;                                         // Störimpuls beim Einschalten verwerfen
     Serial.println("IMU ok");
   } else {
-    Serial.println("IMU nicht verfuegbar - Bluetooth bleibt immer auffindbar, ohne Bewegung, Stillstand und Klopfen");
+    Serial.println("IMU nicht verfuegbar - Bluetooth bleibt immer auffindbar, ohne Bewegungsanzeige und Klopfen");
   }
 
   // DRV2605

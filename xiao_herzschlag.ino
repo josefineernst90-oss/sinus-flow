@@ -831,7 +831,8 @@ void setup() {
   analogReference(AR_INTERNAL_3_0);
   analogReadResolution(12);
 
-  // BLE
+  // BLE (die Bluefruit-Bibliothek lässt sonst die blaue LED beim Werben blinken und bei Verbindung leuchten)
+  Bluefruit.autoConnLed(false);
   Bluefruit.begin();
   Bluefruit.setTxPower(0);
   Bluefruit.setName("XiaoSwitch");

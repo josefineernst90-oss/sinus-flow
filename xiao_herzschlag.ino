@@ -80,11 +80,8 @@ const unsigned long TAP_SPERRE_MS = 1500;   // nach einem Doppelklopfen kurz kei
 // ---- Bluetooth-Schlaf ----
 const unsigned long BLE_SLEEP_MS = 120000;  // 2 min ohne Verbindung -> Bluetooth schläft
 
-// ---- Automatik: Stillstand ----
-const float         STILL_DELTA  = 0.05f;   // g, geglättete Bewegung darunter = Ruhe
-const unsigned long STILL_MS     = 10000;   // so lange Ruhe, bis das Programm startet
-const unsigned long WAIT_MS      = 120000;  // so lange wird pro Versuch auf Ruhe gewartet
-const int           MAX_VERSUCHE = 3;       // Ankündigungen je Auslösung (1 + 2 Aufschübe)
+// ---- Automatik ----
+const unsigned long ANNOUNCE_PAUSE_MS = 1200;   // Pause zwischen Ankündigung und Programmstart
 
 // ---- Panikmodus ----
 const unsigned long PANIK_EIN_MS    = 4000;
@@ -148,9 +145,11 @@ const float         AUS_F1 = 1.08f;   // Schlagabstand am Ende (langsamer)
 
 // ---- Konfigurationsdatei ----
 #define CFG_FILE      "/cfg.bin"
-#define CFG_MAGIC     0xA9     // 0xA8 (13 Byte, ältere Version) wird noch gelesen
-#define CFG_MAGIC_OLD 0xA8
-#define CFG_LEN       16
+#define CFG_MAGIC     0xAA     // 21 Byte; ältere Versionen werden noch gelesen
+#define CFG_LEN       21
+#define CFG_MAGIC_V2  0xA9     // 16 Byte (ohne Zeitfenster)
+#define CFG_LEN_V2    16
+#define CFG_MAGIC_OLD 0xA8     // 13 Byte (ohne Ankündigung/Panik/Zeitfenster)
 #define CFG_LEN_OLD   13
 
 // ---- Minimaler LSM6DS3-Treiber ----
@@ -233,6 +232,7 @@ const uint8_t VIBE_CHAR_UUID[16]      = {0x14,0x12,0x8a,0x76,0x04,0xd1,0x6c,0x4f
 const uint8_t HEART_CHAR_UUID[16]     = {0x14,0x12,0x8a,0x76,0x04,0xd1,0x6c,0x4f,0x7e,0x53,0xf2,0xe8,0x03,0x00,0xb1,0x19};
 const uint8_t BREATH_CHAR_UUID[16]    = {0x14,0x12,0x8a,0x76,0x04,0xd1,0x6c,0x4f,0x7e,0x53,0xf2,0xe8,0x04,0x00,0xb1,0x19};
 const uint8_t PLAN_CHAR_UUID[16]      = {0x14,0x12,0x8a,0x76,0x04,0xd1,0x6c,0x4f,0x7e,0x53,0xf2,0xe8,0x05,0x00,0xb1,0x19};
+const uint8_t TIME_CHAR_UUID[16]      = {0x14,0x12,0x8a,0x76,0x04,0xd1,0x6c,0x4f,0x7e,0x53,0xf2,0xe8,0x06,0x00,0xb1,0x19};
 
 BLEService        motionService(MOTION_SERVICE_UUID);
 BLECharacteristic motionChar(MOTION_CHAR_UUID);
@@ -240,6 +240,7 @@ BLECharacteristic vibeChar(VIBE_CHAR_UUID);
 BLECharacteristic heartChar(HEART_CHAR_UUID);
 BLECharacteristic breathChar(BREATH_CHAR_UUID);
 BLECharacteristic planChar(PLAN_CHAR_UUID);
+BLECharacteristic timeChar(TIME_CHAR_UUID);
 BLEBas            blebas;
 
 // ---- Akku ----
@@ -266,6 +267,9 @@ volatile uint16_t schedDurationMin = 3;    // für Y Minuten
 volatile uint8_t  announceStrength = 200;  // Stärke von Ankündigung und Ende-Signal (0 = stumm)
 volatile uint8_t  tapThs         = 6;      // Klopf-Härte 1 (empfindlich) .. 31 (hart), je 62,5 mg
 volatile bool     panicEnabled   = true;   // Doppelklopfen startet den Panikmodus
+volatile bool     windowOn       = false;  // Automatik nur im Zeitfenster
+volatile uint16_t windowStartMin = 8 * 60; // Beginn, Minuten seit 0:00
+volatile uint16_t windowEndMin   = 18 * 60;// Ende, Minuten seit 0:00 (Ende < Beginn = über Mitternacht)
 
 volatile bool cfgDirty    = false;   // seit dem letzten Speichern geändert
 volatile bool savePending = false;   // beim Trennen gesetzt, loop() speichert
@@ -275,8 +279,6 @@ volatile bool tapCfgDirty = false;   // Klopf-Härte muss in den Sensor geschrie
 float pax = 0, pay = 0, paz = 0;
 bool  primed    = false;
 bool  wasMoving = false;
-float motionEma = 1.0f;              // geglättete Bewegung (g pro Abtastung)
-unsigned long stillSince = 0;        // seit wann Ruhe herrscht (0 = nicht ruhig)
 unsigned long lastStatusAt = 0;
 unsigned long vibeOffAt    = 0;
 int  currentVibe = 0;
@@ -289,13 +291,16 @@ uint8_t lastMotionVal = 0;
 // Session: läuft das Programm gerade? Mit Verbindung immer, ohne Verbindung nach Automatik.
 volatile bool sessionActive = true;
 
-enum SchedState { SCH_OFF, SCH_IDLE, SCH_WAIT, SCH_RUN };
+enum SchedState { SCH_OFF, SCH_IDLE, SCH_RUN };
 SchedState    schedState      = SCH_OFF;
 unsigned long schedNextStart  = 0;
 unsigned long schedSessionEnd = 0;
-unsigned long schedWaitStart  = 0;
-int           schedAttempts   = 0;
 bool          schedDeferred   = false;   // Session wurde vom Panikmodus verdrängt
+
+// Uhrzeit (kommt von der Seite beim Verbinden, läuft danach über millis() weiter)
+volatile bool clockValid   = false;
+volatile uint32_t clockSec = 0;          // Sekunden seit 0:00 zum Zeitpunkt clockSyncMs
+unsigned long clockSyncMs  = 0;
 
 // Panikmodus
 bool          panicActive  = false;
@@ -326,6 +331,11 @@ void saveConfig() {
   b[13] = announceStrength;
   b[14] = tapThs;
   b[15] = panicEnabled ? 1 : 0;
+  b[16] = windowOn ? 1 : 0;
+  b[17] = windowStartMin & 0xFF;
+  b[18] = (windowStartMin >> 8) & 0xFF;
+  b[19] = windowEndMin & 0xFF;
+  b[20] = (windowEndMin >> 8) & 0xFF;
 
   InternalFS.remove(CFG_FILE);
   File f(InternalFS);
@@ -345,7 +355,8 @@ void loadConfig() {
   if (!f.open(CFG_FILE, FILE_O_READ)) { Serial.println("Keine gespeicherte Konfiguration"); return; }
   int n = f.read(b, CFG_LEN);
   f.close();
-  bool neu = (n == CFG_LEN     && b[0] == CFG_MAGIC);
+  bool v3  = (n == CFG_LEN     && b[0] == CFG_MAGIC);
+  bool neu = v3 || (n == CFG_LEN_V2 && b[0] == CFG_MAGIC_V2);
   bool alt = (n == CFG_LEN_OLD && b[0] == CFG_MAGIC_OLD);
   if (!neu && !alt) { Serial.println("Konfiguration ungueltig - Standardwerte"); return; }
 
@@ -369,6 +380,13 @@ void loadConfig() {
     int th = b[14]; if (th < 1) th = 1; if (th > 31) th = 31;
     tapThs = (uint8_t)th;
     panicEnabled = b[15] & 1;
+  }
+  if (v3) {
+    windowOn = b[16] & 1;
+    int ws = b[17] | (b[18] << 8); if (ws > 1439) ws = 1439;
+    int we = b[19] | (b[20] << 8); if (we > 1439) we = 1439;
+    windowStartMin = (uint16_t)ws;
+    windowEndMin   = (uint16_t)we;
   }
   Serial.println("Konfiguration geladen");
 }
@@ -806,10 +824,43 @@ void rhythmUpdate(unsigned long now) {
 }
 
 // ==========================================================================
-// Automatik: Ankündigung -> auf Stillstand warten -> Session -> Ende-Signal
-// (nur ohne Verbindung)
+// Uhrzeit und Zeitfenster
+// ==========================================================================
+// Sekunden seit 0:00 (nur gültig, wenn clockValid). Faltet millis() laufend ein,
+// damit der Überlauf nach 49 Tagen nichts verfälscht.
+uint32_t clockNowSec() {
+  unsigned long d = millis() - clockSyncMs;
+  unsigned long sec = d / 1000UL;
+  clockSyncMs += sec * 1000UL;
+  clockSec = (clockSec + (uint32_t)sec) % 86400UL;
+  return clockSec;
+}
+
+void setClock(uint32_t secOfDay) {
+  clockSec = secOfDay % 86400UL;
+  clockSyncMs = millis();
+  clockValid = true;
+}
+
+// Liegt die Automatik gerade im erlaubten Zeitfenster?
+// Ohne Zeitfenster immer. Mit Zeitfenster, aber ohne bekannte Uhrzeit (nach Neustart,
+// bevor die Seite die Zeit gesetzt hat): nein, damit nachts nichts auslöst.
+bool inWindow() {
+  if (!windowOn) return true;
+  if (!clockValid) return false;
+  uint32_t m = clockNowSec() / 60UL;
+  uint32_t s0 = windowStartMin, e0 = windowEndMin;
+  if (s0 == e0) return true;                       // gleiche Zeit = ganztägig
+  if (s0 < e0)  return m >= s0 && m < e0;
+  return m >= s0 || m < e0;                        // über Mitternacht
+}
+
+// ==========================================================================
+// Automatik: Ankündigung -> Session -> Ende-Signal (nur ohne Verbindung)
 // ==========================================================================
 void scheduleUpdate(unsigned long now) {
+  if (clockValid) clockNowSec();        // Uhr laufend nachführen
+
   if (Bluefruit.connected()) {          // mit Verbindung läuft immer direkt, was die Seite zeigt
     sessionActive = true;
     schedState = SCH_OFF;
@@ -829,7 +880,7 @@ void scheduleUpdate(unsigned long now) {
   // Panikmodus verdrängt die Session; nach dem Panikmodus kommt sie 2 min später
   if (panicActive) {
     sessionActive = false;
-    if (schedState == SCH_WAIT || schedState == SCH_RUN) { schedState = SCH_IDLE; schedDeferred = true; }
+    if (schedState == SCH_RUN) { schedState = SCH_IDLE; schedDeferred = true; }
     else if (schedState == SCH_IDLE && (long)(now - schedNextStart) >= 0) schedDeferred = true;
     else if (schedState == SCH_OFF) { schedState = SCH_IDLE; schedNextStart = now + ivMs; }
     return;
@@ -844,41 +895,24 @@ void scheduleUpdate(unsigned long now) {
 
     case SCH_IDLE:
       sessionActive = false;
+      if (!inWindow()) {                 // außerhalb des Zeitfensters: Zähler hält an,
+        schedNextStart = now + ivMs;     // die erste Session kommt ein Intervall nach Fensterbeginn
+        schedDeferred = false;
+        break;
+      }
       if ((long)(now - schedNextStart) >= 0) {
         announceSignal();
+        delay(ANNOUNCE_PAUSE_MS);
         now = millis();
-        schedAttempts = 1;
-        schedWaitStart = now;
-        stillSince = 0; motionEma = 1.0f; primed = false;
         schedNextStart = now + ivMs;     // Intervall von Start zu Start
-        schedState = SCH_WAIT;
-        Serial.println("Automatik: angekuendigt, warte auf Stillstand");
-      }
-      break;
-
-    case SCH_WAIT:
-      sessionActive = false;
-      if (stillSince && now - stillSince >= STILL_MS) {
-        sessionActive = true;
         schedSessionEnd = now + duMs;
+        sessionActive = true;
         schedState = SCH_RUN;
-        Serial.println("Automatik: Session laeuft");
-      } else if (now - schedWaitStart >= WAIT_MS) {
-        if (schedAttempts < MAX_VERSUCHE) {
-          announceSignal();
-          now = millis();
-          schedAttempts++;
-          schedWaitStart = now;
-          Serial.println("Automatik: erneut angekuendigt");
-        } else {
-          schedState = SCH_IDLE;         // aufgegeben, nächste Auslösung kommt nach dem Intervall
-          if ((long)(now - schedNextStart) >= 0) schedNextStart = now + 30000UL;
-          Serial.println("Automatik: Session ausgefallen");
-        }
+        Serial.println("Automatik: angekuendigt, Session laeuft");
       }
       break;
 
-    case SCH_RUN:
+    case SCH_RUN:                        // läuft bis zum Ende, auch über das Fensterende hinaus
       if ((long)(now - schedSessionEnd) >= 0) {
         sessionActive = false;
         schedState = SCH_IDLE;
@@ -1011,6 +1045,13 @@ void plan_write_cb(uint16_t conn_handle, BLECharacteristic* chr, uint8_t* data, 
   schedOn          = data[0] & 1;
   schedIntervalMin = (uint16_t)iv;
   schedDurationMin = (uint16_t)du;
+  if (len >= 13) {
+    windowOn = data[8] & 1;
+    int ws = data[9]  | (data[10] << 8); if (ws > 1439) ws = 1439;
+    int we = data[11] | (data[12] << 8); if (we > 1439) we = 1439;
+    windowStartMin = (uint16_t)ws;
+    windowEndMin   = (uint16_t)we;
+  }
   if (len >= 8) {
     announceStrength = data[5];
     int th = data[6];
@@ -1020,6 +1061,16 @@ void plan_write_cb(uint16_t conn_handle, BLECharacteristic* chr, uint8_t* data, 
     panicEnabled = data[7] & 1;
   }
   cfgDirty = true;
+}
+
+// Uhrzeit von der Seite: 3 Byte = Minute des Tages (u16 LE, 0..1439) und Sekunde (0..59)
+void time_write_cb(uint16_t conn_handle, BLECharacteristic* chr, uint8_t* data, uint16_t len) {
+  (void)conn_handle; (void)chr;
+  if (len < 2) return;
+  uint32_t m = data[0] | (data[1] << 8);
+  uint32_t sc = (len >= 3) ? data[2] : 0;
+  if (m > 1439 || sc > 59) return;
+  setClock(m * 60UL + sc);
 }
 
 void connect_cb(uint16_t handle) {
@@ -1154,14 +1205,23 @@ void setup() {
 
   planChar.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP);
   planChar.setPermission(SECMODE_OPEN, SECMODE_OPEN);
-  planChar.setMaxLen(8);
+  planChar.setMaxLen(13);
   planChar.setWriteCallback(plan_write_cb);
   planChar.begin();
-  uint8_t planInit[8] = { (uint8_t)(schedOn ? 1 : 0),
+  uint8_t planInit[13] = { (uint8_t)(schedOn ? 1 : 0),
                           (uint8_t)(schedIntervalMin & 0xFF), (uint8_t)(schedIntervalMin >> 8),
                           (uint8_t)(schedDurationMin & 0xFF), (uint8_t)(schedDurationMin >> 8),
-                          announceStrength, tapThs, (uint8_t)(panicEnabled ? 1 : 0) };
-  planChar.write(planInit, 8);
+                          announceStrength, tapThs, (uint8_t)(panicEnabled ? 1 : 0),
+                          (uint8_t)(windowOn ? 1 : 0),
+                          (uint8_t)(windowStartMin & 0xFF), (uint8_t)(windowStartMin >> 8),
+                          (uint8_t)(windowEndMin & 0xFF), (uint8_t)(windowEndMin >> 8) };
+  planChar.write(planInit, 13);
+
+  timeChar.setProperties(CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP);
+  timeChar.setPermission(SECMODE_NO_ACCESS, SECMODE_OPEN);
+  timeChar.setMaxLen(3);
+  timeChar.setWriteCallback(time_write_cb);
+  timeChar.begin();
 
   startAdv();
   bleIdleSince = millis();
@@ -1231,11 +1291,13 @@ void loop() {
     Serial.print(" session="); Serial.print(sessionActive);
     Serial.print(" auto="); Serial.print(schedOn);
     Serial.print(" zustand="); Serial.print((int)schedState);
+    Serial.print(" uhr="); if (clockValid) Serial.print(clockSec / 60); else Serial.print("?");
+    Serial.print(" fenster="); Serial.print(inWindow());
     Serial.print(" panik="); Serial.println(panicActive);
   }
 
-  // IMU auslesen: Bewegung (verbunden) und Stillstand (beim Warten auf die Session)
-  bool wantMotion = imuOk && (Bluefruit.connected() || schedState == SCH_WAIT);
+  // IMU auslesen: Bewegung (nur verbunden, für die Anzeige in der Seite)
+  bool wantMotion = imuOk && Bluefruit.connected();
   if (wantMotion && now - lastSampleAt >= SAMPLE_MS) {
     lastSampleAt = now;
     float ax = imu.readFloatAccelX();
@@ -1247,10 +1309,6 @@ void loop() {
       float dx = ax - pax, dy = ay - pay, dz = az - paz;
       float delta = sqrt(dx * dx + dy * dy + dz * dz);
       pax = ax; pay = ay; paz = az;
-
-      motionEma = 0.75f * motionEma + 0.25f * delta;
-      if (motionEma < STILL_DELTA) { if (!stillSince) stillSince = now; }
-      else stillSince = 0;
 
       if (Bluefruit.connected()) {
         if (delta > NOISE_FLOOR) {
@@ -1268,13 +1326,11 @@ void loop() {
     }
   } else if (!wantMotion) {
     primed = false;
-    stillSince = 0;
-    motionEma = 1.0f;
   }
 
-  // Im Leerlauf lange schlafen (spart Strom), bei Rhythmus kurz (genaues Timing), beim Warten/Verbinden mittel
+  // Im Leerlauf lange schlafen (spart Strom), bei Rhythmus kurz (genaues Timing), beim Verbinden mittel
   int dly = 50;
   if (rhythmRuns || panicActive) dly = 5;
-  else if (Bluefruit.connected() || schedState == SCH_WAIT) dly = 20;
+  else if (Bluefruit.connected()) dly = 20;
   delay(dly);
 }

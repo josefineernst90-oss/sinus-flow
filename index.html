@@ -85,6 +85,10 @@
   input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
   .panel.air input[type=range] { accent-color: var(--air); }
   .panel.auto input[type=range] { accent-color: var(--auto); }
+  .times { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin: 4px 0 12px; }
+  .times[hidden] { display: none; }
+  .times label { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+  .times input[type=time] { font: inherit; font-size: 16px; font-weight: 650; color: var(--txt); background: transparent; border: 1px solid var(--line, rgba(255,255,255,.18)); border-radius: 10px; padding: 6px 10px; color-scheme: dark; }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; }
   .chip { font: inherit; cursor: pointer; background: transparent; color: var(--txt); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; }
   .chip:hover, .chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
@@ -193,8 +197,15 @@
       <button class="chip" type="button" data-iv="30">alle 30 min</button>
       <button class="chip" type="button" data-iv="60">stündlich</button>
     </div>
+    <button class="btn switch" id="win" type="button" aria-pressed="false">
+      <span>Nur zwischen bestimmten Uhrzeiten</span><span class="state" id="winState">Aus</span>
+    </button>
+    <div class="times" id="winTimes">
+      <label for="wfrom">von <input id="wfrom" type="time" value="08:00"></label>
+      <label for="wto">bis <input id="wto" type="time" value="18:00"></label>
+    </div>
     <div class="summary" id="summary"></div>
-    <p class="sub">Das Programm besteht aus Herzschlag und Atmung wie oben eingestellt (nur was an ist). Die Biene speichert alles beim Trennen und läuft danach ohne Verbindung allein. Die erste Session beginnt ein Intervall nach dem Trennen. Ablauf: Ankündigung (zwei kräftige Schläge), dann wartet die Biene auf 10 s Stillstand, bevor das Programm startet. Kommt keine Ruhe, kündigt sie nach 2 min erneut an, nach drei Versuchen fällt die Session aus. Am Ende klingt der Herzschlag aus, danach kommen zwei weiche Klopfer.</p>
+    <p class="sub">Das Programm besteht aus Herzschlag und Atmung wie oben eingestellt (nur was an ist). Die Biene speichert alles beim Trennen und läuft danach ohne Verbindung allein. Die erste Session beginnt ein Intervall nach dem Trennen. Ablauf: Ankündigung (zwei kräftige Schläge), kurze Pause, dann startet das Programm sofort, auch wenn du gerade läufst. Am Ende klingt der Herzschlag aus, danach kommen zwei weiche Klopfer. Mit Uhrzeiten löst die Biene nur im Zeitfenster aus. Die erste Session kommt ein Intervall nach Fensterbeginn, eine laufende Session wird zu Ende gespielt. Die Uhrzeit setzt die Seite bei jedem Verbinden. Nach leerem Akku oder Neustart bleibt die Biene im Zeitfenster-Betrieb still, bis du einmal verbunden hast.</p>
     <div class="row">
       <label for="ann">Stärke der Ankündigung <output id="annOut">80 %</output></label>
       <input id="ann" type="range" min="0" max="100" step="5" value="80">
@@ -224,6 +235,7 @@ const SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
 const HEART_UUID   = "19b10003-e8f2-537e-4f6c-d104768a1214";   // [BPM, Stärke 0..255, An 0/1]
 const BREATH_UUID  = "19b10004-e8f2-537e-4f6c-d104768a1214";   // [Atemzüge/min, Stärke 0..255, An 0/1, Stil 0..4]
 const PLAN_UUID    = "19b10005-e8f2-537e-4f6c-d104768a1214";   // [Automatik 0/1, Intervall u16 LE, Dauer u16 LE, Ankündigung 0..255, Klopf-Härte 1..31, Panik 0/1]
+const TIME_UUID    = "19b10006-e8f2-537e-4f6c-d104768a1214";   // [Minute des Tages u16 LE, Sekunde] - schreibt die Seite beim Verbinden
 const S1_MS = 200, S2_MS = 150, S2_FAKTOR = 0.70;
 const ATEM_EINATMEN_ANTEIL = 0.40;
 const AUSATMEN_VERZOEGERUNG_MS = 60, AUS_F0 = 0.92, AUS_F1 = 1.08;
@@ -234,8 +246,9 @@ const orb = $('orb'), lung = $('lung'), connectBtn = $('connect'), statusEl = $(
 let on = false, bpm = 60, strength = 60;               // Herz, Stärke in Prozent
 let bOn = false, rate = 12, bStrength = 70, style = 0; // Atem, Stärke in Prozent, Stil 0 Pulsfolge, 1 Welle, 2 Brandung, 3 Klopfen, 4 Rauschen
 let sOn = false, iv = 30, du = 3;                      // Automatik
+let wOn = false, wFrom = 8 * 60, wTo = 18 * 60;        // Zeitfenster, Minuten seit 0:00
 let ann = 80, panicOn = true, ths = 6;                 // Ankündigung in Prozent, Panikmodus per Doppelklopfen, Klopf-Härte
-let device = null, heartChar = null, breathChar = null, planChar = null;
+let device = null, heartChar = null, breathChar = null, planChar = null, timeChar = null;
 let battChar = null, battTimer = null;
 
 function setStatus(text, kind) { statusEl.textContent = text; statusEl.className = 'status' + (kind ? ' ' + kind : ''); }
@@ -348,6 +361,16 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // ---- Anzeige ----
+function hhmm(m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); }
+function parseHhmm(v, fallback) {
+  const m = /^(\d{1,2}):(\d{2})/.exec(v || '');
+  return m ? Math.min(23, Number(m[1])) * 60 + Math.min(59, Number(m[2])) : fallback;
+}
+function windowText() {
+  if (!wOn) return '';
+  if (wFrom === wTo) return ', ganztägig';
+  return ', nur zwischen ' + hhmm(wFrom) + ' und ' + hhmm(wTo) + ' Uhr';
+}
 function render() {
   orb.setAttribute('aria-pressed', String(on));
   $('go').hidden = on;
@@ -370,6 +393,10 @@ function render() {
 
   $('sw').setAttribute('aria-pressed', String(sOn));
   $('swState').textContent = sOn ? 'An' : 'Aus';
+  $('win').setAttribute('aria-pressed', String(wOn));
+  $('winState').textContent = wOn ? 'An' : 'Aus';
+  $('winTimes').hidden = !wOn;
+  $('wfrom').value = hhmm(wFrom); $('wto').value = hhmm(wTo);
   $('iv').value = iv; $('du').value = du;
   $('ivOut').textContent = iv + ' min';
   $('duOut').textContent = du + ' min';
@@ -383,7 +410,7 @@ function render() {
   if (bOn) parts.push('Atmung');
   $('summary').textContent = sOn
     ? (parts.length
-        ? 'Nach dem Trennen: alle ' + iv + ' min für ' + du + ' min ' + parts.join(' und ') + '.'
+        ? 'Nach dem Trennen: alle ' + iv + ' min für ' + du + ' min ' + parts.join(' und ') + windowText() + '.'
         : 'Schalte oben Herzschlag oder Atmung an, sonst gibt es nichts zu starten.')
     : 'Automatik aus: Nach dem Trennen ist die Biene still.';
 }
@@ -391,7 +418,7 @@ function render() {
 // ---- Senden an die Biene ----
 // Web Bluetooth erlaubt nur eine Übertragung gleichzeitig. Darum eine gemeinsame Warteschlange:
 // Herz, Atem und Automatik markieren sich als "geändert", gesendet wird immer der letzte Stand.
-let sending = false, dirtyH = false, dirtyB = false, dirtyS = false;
+let sending = false, dirtyH = false, dirtyB = false, dirtyS = false, dirtyT = false;
 
 async function writeChar(ch, data) {
   if (ch.writeValueWithResponse) await ch.writeValueWithResponse(data);
@@ -401,7 +428,7 @@ async function flush() {
   if (sending) return;
   sending = true;
   try {
-    while (dirtyH || dirtyB || dirtyS) {
+    while (dirtyH || dirtyB || dirtyS || dirtyT) {
       if (dirtyH) {
         dirtyH = false;
         if (heartChar) await writeChar(heartChar, new Uint8Array([bpm, Math.round(strength / 100 * 255), on ? 1 : 0]));
@@ -412,7 +439,16 @@ async function flush() {
       }
       if (dirtyS) {
         dirtyS = false;
-        if (planChar) await writeChar(planChar, new Uint8Array([sOn ? 1 : 0, iv & 255, iv >> 8, du & 255, du >> 8, Math.round(ann / 100 * 255), ths, panicOn ? 1 : 0]));
+        if (planChar) await writeChar(planChar, new Uint8Array([sOn ? 1 : 0, iv & 255, iv >> 8, du & 255, du >> 8, Math.round(ann / 100 * 255), ths, panicOn ? 1 : 0,
+          wOn ? 1 : 0, wFrom & 255, wFrom >> 8, wTo & 255, wTo >> 8]));
+      }
+      if (dirtyT) {
+        dirtyT = false;
+        if (timeChar) {
+          const d = new Date();
+          const m = d.getHours() * 60 + d.getMinutes();
+          await writeChar(timeChar, new Uint8Array([m & 255, m >> 8, d.getSeconds()]));
+        }
       }
     }
   } catch (e) {
@@ -423,6 +459,7 @@ async function flush() {
 function pushHeart()  { dirtyH = true; flush(); }
 function pushBreath() { dirtyB = true; flush(); }
 function pushPlan()   { dirtyS = true; flush(); }
+function pushTime()   { dirtyT = true; flush(); }
 
 function setOn(v) {
   on = v;
@@ -457,6 +494,9 @@ document.querySelectorAll('.chip[data-style]').forEach((c) => c.addEventListener
 $('sw').addEventListener('click', () => { sOn = !sOn; render(); pushPlan(); });
 $('iv').addEventListener('input', (e) => { iv = Number(e.target.value); if (du > iv) du = iv; render(); pushPlan(); });
 $('du').addEventListener('input', (e) => { du = Number(e.target.value); if (du > iv) iv = du; render(); pushPlan(); });
+$('win').addEventListener('click', () => { wOn = !wOn; render(); pushPlan(); pushTime(); });
+$('wfrom').addEventListener('change', (e) => { wFrom = parseHhmm(e.target.value, wFrom); render(); pushPlan(); pushTime(); });
+$('wto').addEventListener('change', (e) => { wTo = parseHhmm(e.target.value, wTo); render(); pushPlan(); pushTime(); });
 $('ann').addEventListener('input', (e) => { ann = Number(e.target.value); render(); pushPlan(); });
 $('pn').addEventListener('click', () => { panicOn = !panicOn; render(); pushPlan(); });
 $('ths').addEventListener('input', (e) => { ths = Number(e.target.value); render(); pushPlan(); });
@@ -494,6 +534,11 @@ async function readState() {
       ann = Math.round(d.getUint8(5) / 255 * 100);
       ths = Math.max(2, Math.min(20, d.getUint8(6) || 6));
       panicOn = !!(d.getUint8(7) & 1);
+    }
+    if (d.byteLength >= 13) {
+      wOn = !!(d.getUint8(8) & 1);
+      wFrom = Math.min(1439, d.getUint16(9, true));
+      wTo = Math.min(1439, d.getUint16(11, true));
     }
   }
   $('bpm').value = bpm; $('str').value = strength;
@@ -539,11 +584,11 @@ async function startBattery(server) {
 // ---- Bluetooth ----
 function onDisconnect() {
   hideBattery();
-  heartChar = null; breathChar = null; planChar = null; device = null;
+  heartChar = null; breathChar = null; planChar = null; timeChar = null; device = null;
   connectBtn.textContent = 'Mit Biene verbinden';
   connectBtn.disabled = false;
   setStatus(sOn
-    ? 'Getrennt. Die Einstellung ist auf der Biene gespeichert, die Automatik läuft: alle ' + iv + ' min für ' + du + ' min.'
+    ? 'Getrennt. Die Einstellung ist auf der Biene gespeichert, die Automatik läuft: alle ' + iv + ' min für ' + du + ' min' + windowText() + '.'
     : 'Getrennt. Die Einstellung ist auf der Biene gespeichert. Die Automatik ist aus, die Biene ist still.', 'warn');
 }
 async function connect() {
@@ -561,6 +606,7 @@ async function connect() {
     try { heartChar = await svc.getCharacteristic(HEART_UUID); } catch (e) { heartChar = null; }
     try { breathChar = await svc.getCharacteristic(BREATH_UUID); } catch (e) { breathChar = null; }
     try { planChar = await svc.getCharacteristic(PLAN_UUID); } catch (e) { planChar = null; }
+    try { timeChar = await svc.getCharacteristic(TIME_UUID); } catch (e) { timeChar = null; }
 
     connectBtn.textContent = 'Trennen';
     connectBtn.disabled = false;
@@ -576,6 +622,7 @@ async function connect() {
       // Lesen klappt nicht: Seitenstand zur Biene schicken
       pushHeart(); pushBreath(); if (planChar) pushPlan();
     }
+    pushTime();   // Uhrzeit setzen (für das Zeitfenster)
     if (!planChar) {
       setStatus('Verbunden. Die Firmware hat noch keine Automatik und kein gespeichertes Programm.', 'warn');
     } else if (!breathChar) {

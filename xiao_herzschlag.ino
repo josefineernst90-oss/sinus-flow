@@ -585,8 +585,10 @@ static int breathInhale(unsigned long posMs, unsigned long inhaleMs, float boost
       if (n > 4) n = 4;
       float spacing = (float)inhaleMs / n;
       float since = fmodf((float)posMs, spacing);                   // ms seit dem letzten Klopfen
-      const float KNOCK_MS = 90.0f;
-      float amp = (float)top * 0.85f;
+      const float KNOCK_MS = 140.0f;                                // lang genug, dass der Motor voll anläuft
+      int topK = (int)(map(breathStrength, 1, 255, RTP_MIN, RTP_MAX) * boost + 0.5f);  // volle Skala wie beim Herzschlag
+      if (topK > RTP_MAX) topK = RTP_MAX;
+      float amp = (float)topK;
       if (amp < RTP_MIN) amp = RTP_MIN;
       if (since < KNOCK_MS) {
         int val = (int)(amp * heartEnv(since, KNOCK_MS) + 0.5f);
